@@ -4571,18 +4571,19 @@ __END__
 	newpath -0.07   0.135  0.21 245 292 arc stroke grestore
 } bind def
 
-/semiquaverrest {	% usage: x y staveheight semiquaverrest
+/semiquaverrest {   % usage: x y staveheight semiquaverrest
 	gsave 3 1 roll translate dup scale 0.03 setlinewidth
-	newpath -0.125 0.0625 0.05 0 360 arc fill
-	newpath 0 0.25 0.22 245 295 arc -0.05 -0.22 lineto stroke
-	newpath -0.135 -0.07 0.05 0 360 arc fill
-	newpath -0.04 0.14 0.22 245 295 arc stroke grestore
+	newpath -0.125  0.07  0.05 0 360 arc fill
+	newpath  0      0.29  0.25   245 290 arc -0.05 -0.22 lineto stroke
+	newpath -0.135 -0.07  0.05 0 360 arc fill
+	newpath -0.04   0.14  0.22 245 285 arc stroke grestore
 } bind def
 
-/quaverrest {	% usage: x y staveheight quaverrest
-	gsave 3 1 roll translate dup scale newpath
-	-0.125 0.0625 0.05 0 360 arc fill newpath 0.04 setlinewidth
-	0 0.25 0.22 245 295 arc -0.05 -0.2 lineto stroke grestore
+/quaverrest {   % usage: x y staveheight quaverrest
+	gsave 3 1 roll translate dup scale 0.035 setlinewidth
+	newpath -0.125  0.08  0.05 0 360 arc fill
+	newpath  0      0.29  0.24 245 290 arc -0.05 -0.2 lineto stroke
+	grestore
 } bind def
 
 /crochetrest {	% usage: x y staveheight crochetrest
