@@ -1,0 +1,64 @@
+#! /usr/bin/perl
+#########################################################################
+#        This Perl script is Copyright (c) 2001, Peter J Billam         #
+#     c/o P J B Computing, GPO Box 669, Hobart TAS 7001, Australia      #
+#                                                                       #
+# Permission is granted  to any individual or institution to use, copy, #
+# modify or redistribute this software, so long as it is not resold for #
+# profit,  and provided this notice is retained.   Neither Peter Billam #
+# nor  P J B Computing  make any representations  about the suitability #
+# of this software for any purpose. It is provided "as is", without any #
+# express or implied warranty.                http://www.pjb.com.au     #
+#########################################################################
+
+my $kludge = "8.4 0 translate 1.0 0.94074 scale\n";
+
+while ($ARGV[$[] =~ /^-([a-z])/) {
+	if ($1 eq 'e') {
+		$kludge = "26 0 translate .94074 0.94074 scale\n"; shift;
+	} elsif ($1 eq 'c') {
+		$kludge = "4 0 translate 1.0 0.95 scale\n"; shift;
+	} else { print <<EOT; exit 0;
+usage:
+   a42us file.a4 > file.us      # scales x by 1.0 and y by .94074
+   a42us -e file.a4 > file.us   # scales x and y Evenly, both by .94074
+   a42us -c file.a4 > file.us   # scales only y, to fit Compatibly on a4 and us
+   a42us -h                     # prints this Helpful message
+EOT
+	}
+}
+while (<>) {
+	# if (/^%%EndPageSetup/) { print "grestore\n"; }
+	print;
+	if (/^%%BeginPageSetup/) { print "gsave $kludge"; }
+}
+
+__END__
+
+# POD Documentation (perldoc or pod2html this file)
+
+=pod
+
+=head1 NAME
+
+a42us
+
+=head1 SYNOPSIS
+
+a42us - Perl script to convert A4 Postscript (eg. groff output) to US
+
+ a42us file.a4 > file.us     # scales x by 1.0 and y by .94074
+ a42us -e file.a4 > file.us  # scales x and y Evenly, both by .94074
+ a42us -c file.a4 > file.us  # scales y, to fit Compatibly on a4 and us
+ a42us -h                    # prints this Helpful message
+
+=head1 AUTHOR
+
+Peter J Billam <peter@pjb.com.au>
+
+=head1 SEE ALSO
+
+http://www.pjb.com.au/, perl(1).
+
+=cut
+

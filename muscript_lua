@@ -1,0 +1,5225 @@
+#!/usr/local/bin/lua
+-- muscript: typesets music scores into PostScript.  Peter Billam, may1994
+-- www.pjb.com.au/muscript  - and into MIDI apr2005, and into XML jan2007
+---------------------------------------------------------------------
+--     This Lua5 script is Copyright (c) 2015, Peter J Billam      --
+--                       www.pjb.com.au                            --
+--                                                                 --
+--  This script is free software; you can redistribute it and/or   --
+--         modify it under the same terms as Lua5 itself.          --
+---------------------------------------------------------------------
+Version = '3.2m for Lua5'  -- 64 rest and hds7
+VersionDate  = '09apr2016';
+
+--require 'DataDumper'
+local concat = table.concat
+local find   = string.find
+local match  = string.match
+local gmatch = string.gmatch
+local sub    = string.sub 
+local gsub   = string.gsub 
+
+-- Beginning of Configuration Stuff: mostly relative to stave height ...
+SpaceAtBeginningOfBar = 0.60
+AccidentalBeforeNote  = 0.40
+AccidentalDxInKeysig  = 0.20
+BlackBlobHalfWidth    = 0.17
+BlackBlobHalfHeight   = 0.113
+WhiteBlobHalfWidth    = 0.183
+BlobQuarterWidth      = 0.085   -- 2.8z
+WhiteBlobHalfHeight   = 0.122
+SmallNoteRatio        = 0.61
+SmallStemRatio        = 0.76
+StemFromBlobCentre    = 0.176
+DotRightOfNote        = 0.38
+DotAboveNote          = 0.06
+NoteShift             = 0.28
+AccidentalShift       = 0.19
+DoubleFlatSpacing     = 0.25
+SpaceLeftOfClef       = 0.40
+SpaceRightOfClef      = 0.90
+SpaceForClef          = 0.80
+SpaceForTimeSig       = 0.50
+SpaceForFatTimeSig    = 0.60
+SpaceAfterKeySig      = 0.10
+SpaceForStartRepeat   = 0.35
+SpaceForEndRepeat     = 0.10
+SpaceAtEndOfBar       = 0.00
+TieAfterNote          = 0.17
+TieAboveNote          = 0.20
+TieShift              = 0.60
+TieDy                 = 0.30
+TieOverhang           = 0.32
+MustSquashTie         = 0.80
+MustReallySquashTie   = 0.50
+MaxTieGradient        = 0.55   -- dimensionless; dy/dx
+TextBelowStave        = 0.50
+TextSize              = 0.55
+SmallFontRatio        = 0.707
+StemLength            = 0.85
+OptionClearance       = 0.19   -- 0.38
+OptionDyDflt          = 0.35
+OptionDy              = { dot=0.25, tenuto=0.26, upbow=0.43, gs=0.55,
+	blank=0.25, Is=0.35, is=0.33, bs=0.35, rs=0.33, I=0.47, i=0.45,
+	b=0.47, r=0.45, dim=0.0, cre=0.0, ['*']=0.35 }
+MinBeamClearance      = 0.70
+FlatHalfHeight        = 0.10   -- 2.9z; was .2
+SharpHalfHeight       = 0.15
+BeamWidth             = 0.13   -- needed in DATA
+BeamSpacing           = 0.22
+MaxBeamStub           = 0.35
+BeamGapMult           = 0.5   -- 2.9t
+TailSpacing           = 0.24
+MaxBeamGradient       = 0.45   -- dimensionless; dy/dx
+SegnoHeight           = 0.90
+RegularFont           = 'Times-Roman-ISO'
+BoldFont              = 'Times-Bold-ISO'
+ItalicFont            = 'Times-Italic-ISO'
+BoldItalicFont        = 'Times-BoldItalic-ISO'
+PedalFont             = 'ZapfChancery-MediumItalic'
+-- XXX the next two should scale with systemsize, or boundarybox ?
+HeaderFontSize        = 9      -- in point
+TitleFontSize         = 17.5   -- in point
+AmpleSysGap           = 0.15   -- relative to page height
+LetterFactor          = 0.94074  -- US letter height relative to A4
+LetterMargin          = 8.4    -- in point
+-- MIDI stuff ....
+TPC                   = 96     -- MIDI Ticks Per Crochet
+DefaultLegato         = 0.85   -- MIDI default length of a crochet
+DefaultVolume         = 100    -- MIDI default volume (0..127)
+-- End of Configuration Stuff.
+
+-- use Text::ParseWords;
+
+-- Command-line options ...
+PageSize = 'a4'
+Strip  = false
+Quiet  = false
+MIDI   = nil
+XmlOpt = false
+PrePro = false
+MidiBarlines = false
+
+------ some globals set by initialise() -------------
+NoteTable       = {}
+Ytable          = {}
+Nbeats          = {}
+Intl2en         = {}
+
+-- Other globals
+Epsilon         = 0.0005 -- less than .001 for good word spacing
+TTY             = nil -- filehandle for /dev/tty
+PageNum         = 0
+Ibar            = 0
+Istave          = 1  -- in Perl, CurrentStaveNum was the same but as a string
+BarType         = {}
+CurrentPulse     = 1  -- in Quarters
+CurrentPulseText = 'cro'
+Stave2clef      = {}
+Stave2channels  = {}   -- 3.1v now a hash of lists
+Stave2volume    = {}
+Stave2pan       = {}
+Stave2bend      = {}   -- 3.2
+Stave2transpose = {}
+Stave2legato    = {}
+Stave2nullkeysigDx = {}  -- 2.9y
+Cha2transpose   = {[0]=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0} -- 3.1u see midi_global
+MidiScore       = {}   -- list
+MidiTempo       = nil -- starts at nil, needed by midi_global & midi_timesig
+OldMidiTempo    = nil
+MidiBarParts    = '2.4'
+MidiTimesig     = ''
+TicksPerMidiBeat = 0
+TicksPerCro     = 96 -- for debugging
+CrosSoFar       = 0
+CrosPerPart     = 0
+Nstaves = {}
+Nblines = {}    -- number of barlines on this system
+Nparts  = {}    -- used by newsystem(), newstave(), ps_event(), ps_beat2x()
+Xpart   = {}    -- Xpart[ipart] within the current bar
+Nbars   = {}    -- needed by bars() and newbar()
+Keysig  = {}    -- [Istave] ; it's local within newstave() but persistent
+TicksAtBarStart = 0
+TicksThisBar    = 0
+MidiExpression  = {}  -- dict
+XmlTimesig      = nil
+Proportion      = {} -- shared by PS and XML
+PartShare       = {} -- shared by newsystem(), newstave(), bars()
+StartBeamUp     = false  -- used by ps_event() and ps_note()
+StartBeamDown   = false  -- used by ps_event() and ps_note()
+StartedSlurs    = {}
+StartedTies     = {}  -- StartedTies[table.concat({Istave,starttie,cha},' ')]
+                      -- ={'note',begin,fullduration,cha,note,velocity,pitch}
+BeamUp          = {}  -- list
+BeamDown        = {}  -- list
+LineNum         = 0
+Accidentalled   = {}
+Options         = {}
+Opt_Cache       = {} -- hash of lists
+OptionMustGoBelow = {  -- 3.1n
+	['P']=true, ['Ped']=true, ['*']=true, ['Sos']=true, ['*Sos']=true,
+	['Una']=true, ['Tre']=true,
+}
+DefaultStem    = nil -- for this stave
+Ystave         = {}  -- dict
+local Ystv     = nil -- timesaver
+MaxStaveHeight = {}
+StaveHeight    = {}
+local StvHgt   = 0   -- timesaver for StaveHeight[Isyst][Istave]
+Xbar           = {}
+GapHeight      = {}
+YblineBot      = {{},}
+YblineTop      = {{},}
+Isyst          = 0
+-- Nsystems    = 0   -- just use RememberNsystems
+RememberSystemsSizes = nil
+RememberNsystems     = nil
+RememberHeader       = {}
+RememberBarsString   = nil
+RememberNbars        = nil
+Xstart = {}  -- Xstart[concat({'tie',Isyst,Istave,itie},' ')] (or 'slur')
+Ystart = {}
+JustDidNewsystem = false
+Xml              = {} -- Policy: all keys and all values will be strings !
+XmlDuration      = {}
+XmlAccidental    = {}
+Accidental2alter = {}
+XmlDynamics = { p=true, pp=true, ppp=true, pppp=true, ppppp=true,
+	pppppp=true, f=true, ff=true, fff=true, ffff=true, fffff=true,
+	ffffff=true, mp=true, mf=true, sf=true, sfp=true, sfpp=true,
+	fp=true, rf=true, rfz=true, sfz=true, sffz=true, fz=true,
+}
+XmlCache         = {}  -- cache for music-data in a measure, to count staves
+Midline          = {}  -- dict
+Line2step        = {}  -- dict  -- for shifting rests in xml
+-- SlurOrTie     = {}  -- dict
+SlurOrTieShift   = {}  -- dict
+PS_Prolog        = nil -- will be set later if MIDI is not defined
+PS_prologAlready = false
+Midi_off         = false
+MidiPedal        = {}  -- 3.0b
+MidiSosPed       = {}  -- 3.0g
+MidiUnaPed       = {}  -- 3.1n
+Vars             = {}  -- set by set_var, sets up generators etc
+RabbitSequence    = {0,1,0,0,1,0,1,0, 0,1,0,0,1}
+OldRabbitSequence = {0,1,0,0,1,0,1,0}
+AabaSequence      = {0,0,1,0, 0,0,1,0, 1,1,0,1, 0,0,1,0}
+VariableFindRE    = "^%s*%$[A-Z][A-Z0-9]*%s*==?%s*.+$"
+VariableSetRE_f   = "^%s*%$[A-Z][A-Z0-9]*%s*==?%s*.+$"
+VariableSetRE_m   = "^%s*%$([A-Z][A-Z0-9]*)%s*(==?)%s*(.+)$"
+VariableGetRE_f   = "%$[A-Z][A-Z0-9]*"
+VariableGetRE_m   = "%$([A-Z][A-Z0-9]*)"
+VarArraySetRE     = "^$([A-Z][A-Z0-9]*)(%d)-(%d)%s*(==?)%s*(.+)$"
+-- next 2 lines used by ps_event() and ps_y_above_note() :
+HighestStemUp = 0 ;  HighestStemDown = 0 ;  HighestNoStem = 0 
+LowestStemUp  = 1000; LowestStemDown = 1000; LowestNoStem = 1000
+
+-- "boundingbox" can override these ...
+lmar    =  40  -- these four for system-layout
+rmar    = 565
+TopMar  = 781
+BotMar  =  60
+HeadMar = 811  -- for header and footer text
+FootMar =  30
+Lmargin = {}
+Rmargin = {}
+
+if not MIDI and not XmlOpt then PS_Prolog = [[
+%%Creator: muscript $Version
+%%EndComments
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% This music was typeset by muscript $Version. Muscript was written %
+% by Peter Billam, and is available from  http://www.pjb.com.au/muscript %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+%%BeginProlog
+%%BeginResource: procset muscript
+/blackblob {	% usage: x y staveheight blackblob
+	gsave 3 1 roll translate
+	dup $BlackBlobHalfWidth mul exch $BlackBlobHalfHeight mul scale newpath
+	0 0 1 0 360 arc fill grestore
+} bind def
+
+/whiteblob {	% usage: x y staveheight whiteblob
+	gsave 3 1 roll translate 0.14 setlinewidth
+	dup $WhiteBlobHalfWidth mul exch $WhiteBlobHalfHeight mul scale newpath
+	0 0 1 280 30 arc fill  0 0 1 100 210 arc fill
+	0 0 1 0 360 arc stroke  grestore
+} bind def
+
+/breve {   % usage: x y staveheight breve
+	gsave 3 1 roll translate $WhiteBlobHalfWidth mul dup scale newpath
+	0.1 setlinewidth  -1.2 -1 moveto -1.2 1 lineto  1.2 -1 moveto
+	1.2 1 lineto stroke newpath 0.3 setlinewidth
+	-1.2 -0.4 moveto 1.2 -0.4 lineto -1.2 0.4 moveto 1.2 0.4 lineto
+	stroke  grestore
+} bind def
+
+/dot {	% usage: x y staveheight dot
+	gsave 3 1 roll translate dup scale newpath
+	0 0 0.04 0 360 arc fill grestore
+} bind def
+
+/doubledot {	% usage: x y staveheight doubledot
+	gsave 3 1 roll translate dup scale newpath
+	0 0 0.04 0 360 arc fill newpath 0.2 0 0.04 0 360 arc fill grestore
+} bind def
+
+/stave {	% usage: x_left x_right y_topline staveheight stave
+	/staveheight exch def /first exch def /x_right exch def /x_left exch def
+	/second first staveheight 0.25 mul sub def
+	/third  first staveheight 0.5  mul sub def
+	/fourth first staveheight 0.75 mul sub def
+	/fifth  first staveheight sub def
+	.015 staveheight mul setlinewidth newpath
+	x_left first  moveto x_right first  lineto 
+	x_left second moveto x_right second lineto
+	x_left third  moveto x_right third  lineto
+	x_left fourth moveto x_right fourth lineto
+	x_left fifth  moveto x_right fifth  lineto stroke
+} bind def
+
+/ledger {	% usage: x y staveheight ledger
+	/staveheight exch def /y exch def /x exch def
+	/x_left x staveheight 0.28 mul sub def
+	/x_right x staveheight 0.28 mul add def
+	.015 staveheight mul setlinewidth
+	newpath x_left y moveto x_right y lineto stroke % grestore
+} bind def
+
+/barline {	% usage: x y_top y_bot staveheight barline
+	0.02 mul setlinewidth /y_bot exch def /y_top exch def /x exch def
+	newpath x y_bot moveto x y_top lineto stroke
+} bind def
+
+/notestem {	% usage: x y_top y_bot staveheight notestem
+	0.02 mul setlinewidth /y_bot exch def /y_top exch def /x exch def
+	newpath x y_bot moveto x y_top lineto stroke
+} bind def
+
+/quaverstemup { % usage: x y_top y_bot staveheight quaverstemup
+	/staveheight exch def /y_bot exch def /y_top exch def /x exch def
+	staveheight 0.02 mul setlinewidth
+	newpath x y_bot moveto x y_top lineto stroke
+	gsave x y_top translate staveheight dup 0.85 mul scale
+	quavertail grestore
+} bind def
+
+/quaverstemdown { % usage: x y_top y_bot staveheight quaverstemdown
+	/staveheight exch def /y_bot exch def /y_top exch def /x exch def
+	staveheight 0.02 mul setlinewidth
+	newpath x y_bot moveto x y_top lineto stroke
+	gsave x y_bot translate staveheight 1.2 mul -0.8 staveheight mul scale
+	quavertail grestore
+} bind def
+
+/quavertail {
+	newpath 0 0 moveto 0	 -0.10 0	 -0.14 0.17 -0.33 curveto
+	0.27 -0.40 0.25 -0.70 0.15 -0.80 curveto
+	0.23 -0.70 0.24 -0.38 0	 -0.28 curveto closepath fill
+} bind def
+
+/beam { % usage: x_mid_left y_mid_left x_mid_right y_mid_right staveheight beam
+	/staveheight exch def /y_mid_right exch def /x_mid_right exch def
+	/y_mid_left exch def /x_mid_left exch def
+	/halfbeamwidth staveheight $BeamWidth mul 0.5 mul def
+	newpath
+	x_mid_left  y_mid_left  halfbeamwidth add moveto
+	x_mid_left  y_mid_left  halfbeamwidth sub lineto
+	x_mid_right y_mid_right halfbeamwidth sub lineto
+	x_mid_right y_mid_right halfbeamwidth add lineto
+	closepath fill
+} bind def
+
+/tremolando { % usage: n x_mid y_mid staveheight tremolando
+	/staveheight_t exch def /y_mid exch def /x_mid exch def /n exch def
+   	/dy staveheight_t $BeamWidth mul def  /dx dy 1.6 mul def
+	n 1 eq {
+		x_mid dx sub y_mid dy sub x_mid dx add y_mid dy add
+		staveheight_t 0.85 mul beam
+	} if
+	n 2 eq {
+		x_mid dx sub y_mid dy 0.0 mul add x_mid dx add y_mid dy 1.4 mul add
+		staveheight_t 0.75 mul beam
+		x_mid dx sub y_mid dy 1.4 mul sub x_mid dx add y_mid dy 0.0 mul sub
+		staveheight_t 0.75 mul beam
+	} if
+	n 3 eq {
+		/dy dy 0.7 mul def
+		x_mid dx sub y_mid dy 0.6 mul add x_mid dx add y_mid dy 2.6 mul add
+		staveheight_t 0.5 mul beam
+		x_mid dx sub y_mid dy sub x_mid dx add y_mid dy add
+		staveheight_t 0.5 mul beam
+		x_mid dx sub y_mid dy 2.6 mul sub x_mid dx add y_mid dy 0.6 mul sub
+		staveheight_t 0.5 mul beam
+	} if
+} bind def
+
+/bracket {	% usage: x y_top y_bot staveheight bracket
+	/staveheight exch def /y_bot exch def /y_top exch def /x exch def
+	staveheight .125 mul setlinewidth
+	newpath x y_top moveto x y_bot lineto stroke
+	staveheight .03 mul setlinewidth
+	/radius staveheight .25 mul def
+	newpath x y_top radius add radius 270 350 arc stroke
+	newpath x y_bot radius sub radius 10 90 arc stroke
+} bind def
+
+/repeatmark {	% usage: x y_top staveheight repeatmark
+	/staveheight exch def /y_top exch def /x exch def
+	gsave x y_top staveheight 0.375 mul sub translate
+	staveheight staveheight scale
+	newpath 0 0 0.06 0 360 arc fill grestore
+	gsave x y_top staveheight 0.625 mul sub translate
+	staveheight staveheight scale
+	newpath 0 0 0.06 0 360 arc fill grestore
+} bind def
+
+/bassclef {	% usage: x y_top staveheight bassclef
+	/staveheight exch def /y_top exch def /x exch def
+	/y_f y_top staveheight 0.25 mul sub def x y_f staveheight f_clef
+} bind def
+/bass8vaclef {	% usage: x y_top staveheight bass8vaclef
+	/staveheight exch def /y_top exch def /x exch def
+	/Times-Italic findfont  staveheight 0.58 mul scalefont  setfont
+	x staveheight 0.15 mul sub y_top staveheight 0.05 mul add moveto (8) show
+	/y_f y_top staveheight 0.25 mul sub def x y_f staveheight f_clef
+} bind def
+/bass8vabclef {	% usage: x y_top staveheight bass8vabclef
+	/staveheight exch def /y_top exch def /x exch def
+	/Times-Italic findfont  staveheight 0.58 mul scalefont  setfont
+	x staveheight 0.2 mul sub y_top staveheight 1.18 mul sub moveto (8) show
+	/y_f y_top staveheight 0.25 mul sub def x y_f staveheight f_clef
+} bind def
+
+/f_clef {	% usage: x y_f staveheight f_clef
+	% gsave x y_f translate staveheight staveheight scale
+	gsave 3 1 roll translate dup scale  % 2.4f
+	newpath .27 .15 .04 0 360 arc fill newpath .27 -.10 .04 0 360 arc fill
+	newpath -.214 0 0.086 0 360 arc fill newpath % start at left
+	-.3	0  moveto -.3  .18 -.23 .25 -.07 .25 curveto
+	-.07 .23 lineto -.21 .23 -.26 .16 -.21  0  curveto
+	closepath fill newpath % start at top
+	-.07 .25 moveto .11 .25 .18 .11 .18 -.07 curveto
+	.07 -.07 lineto .07 .11 0 .23 -.07 .23 curveto
+	closepath fill newpath % start at right
+	.18 -.07 moveto .18 -.25 .01 -.49 -.29 -.59 curveto
+	-.3 -.58 lineto -.08 -.51 .07 -.25 .07 -.07 curveto
+	closepath fill newpath -.3 -.58 0.02 0 360 arc fill grestore
+} bind def
+
+/tenorclef {	% usage: x y_top staveheight tenorclef
+	/staveheight exch def /y_top exch def /x exch def
+	/y_2nd y_top staveheight 0.25 mul sub def x y_2nd staveheight c_clef
+} bind def
+
+/altoclef {	% usage: x y_top staveheight altoclef
+	/staveheight exch def /y_top exch def /x exch def
+	/y_mid y_top staveheight 0.5 mul sub def x y_mid staveheight c_clef
+} bind def
+
+/c_clef {	% usage: x y_middle_c staveheight c_clef
+	/staveheight exch def /y_middle_c exch def /x exch def
+	gsave x y_middle_c translate staveheight staveheight scale
+	newpath .09  setlinewidth -.18  .5 moveto -.18  -.5 lineto stroke
+	newpath .024 setlinewidth -.075 .5 moveto -.075 -.5 lineto stroke
+	newpath -.07 0 moveto .07 .24 lineto .03 0 lineto .07 -.24 lineto
+	closepath fill tophalf 1 -1 scale tophalf grestore
+} bind def
+/tophalf {
+	newpath .028 setlinewidth .07 .24 moveto .07 .08 .13 .08 .16 .08 curveto
+	stroke newpath .07  .39 .055 0 360 arc fill newpath .015 .39 moveto
+	.015 .46 .05 .49 .19 .49 curveto .12 .469 lineto
+	.07 .469 .05 .43 .05 .39 curveto closepath fill newpath .19 .49 moveto
+	.23 .49 .30 .43 .30 .28 curveto .30 .14 .21 .066 .16 .066 curveto
+	.16 .094 lineto .21 .094 .21 .28 .21 .28 curveto
+	.21 .43 .19 .469 .12 .469 curveto closepath fill
+} bind def
+
+/trebleclef {	% usage: x y_top staveheight trebleclef
+	/staveheight exch def /y_top exch def /x exch def
+	/y_g y_top staveheight 0.75 mul sub def x y_g staveheight g_clef
+} bind def
+/treble8vaclef {	% usage: x y_top staveheight treble8vaclef
+	/staveheight exch def /y_top exch def /x exch def
+	/Times-Italic findfont  staveheight 0.58 mul scalefont  setfont
+	x staveheight 0.15 mul add y_top staveheight 0.3 mul add moveto (8) show
+	/y_g y_top staveheight 0.75 mul sub def x y_g staveheight g_clef
+} bind def
+/treble8vabclef {	% usage: x y_top staveheight treble8vabclef
+	/staveheight exch def /y_top exch def /x exch def
+	/Times-Italic findfont  staveheight 0.58 mul scalefont  setfont
+	x staveheight 0.05 mul add y_top staveheight 1.5 mul sub moveto (8) show
+	/y_g y_top staveheight 0.75 mul sub def x y_g staveheight g_clef
+} bind def
+
+/g_clef {	% usage: x y_g staveheight g_clef
+	% gsave x y_g translate staveheight staveheight scale
+	gsave 3 1 roll translate dup scale  % 2.4f
+	% start at bottom left blob ...
+	newpath -.17 -.479 .086 0 360 arc fill
+	newpath
+	-.256 -.479 moveto -.256 -.58  -.17 -.643 -.12 -.643 curveto
+	-.12  -.617 lineto -.21  -.622 -.13 -.58  -.21 -.479 curveto
+	closepath fill
+	newpath .026 setlinewidth
+	-.12 -.63 moveto .07 -.63 .11 -.48 .10 -.4 curveto -.05 .75 lineto stroke
+	newpath % from left of top loop
+	-.062 .751 moveto -.1 1.1	.06  1.18  .10 1.19  curveto % top
+	.125 1.12  lineto .06 1.09 -.084 1.05 -.038 .749 curveto
+	closepath fill
+	newpath  % start at top
+	.10 1.19 moveto  .36 .55 -.27 .45 -.27 .10 curveto % inside of left extreme
+	-.3  .16 lineto -.3  .6  .25 .65 .125 1.12 curveto
+	closepath fill
+	newpath % start at left
+	-.3  .16 moveto -.3  -.15 -.15 -.23 .02 -.23 curveto
+	.02 -.21 lineto -.15 -.21 -.27 -.15 -.27 .10 curveto
+	closepath fill
+	newpath  % start at bottom
+	.02 -.23 moveto .2 -.23 .30 -.12 .30 .04 curveto % right extreme
+	.265 .04 lineto .27 -.11 .2 -.21 .02 -.21 curveto
+	closepath fill
+	newpath
+	.30 .04 moveto .30 .16 .17 .28 .07 .28 curveto % top of body
+	.07 .19 lineto .17 .19 .26 .16 .265 .04 curveto
+	closepath fill
+	newpath % start at top of body
+	.07 .28 moveto -.15 .28 -.15 .05 -.05 -.05 curveto % end
+	-.10 .05 -.08 .19 .07 .19 curveto
+	closepath fill
+	grestore
+} bind def
+
+/oldtrebleclef {	% usage: x y_top staveheight trebleclef
+	/staveheight exch def /y_top exch def /x exch def
+	gsave x y_top staveheight 0.75 mul sub translate
+	staveheight staveheight scale
+	newpath 0.05 setlinewidth -0.3 -0.5 moveto
+	0 -0.75 0.3 -0.6 -0.25 1.05 curveto 0.3 1.07 lineto
+	-0.6 0 -0.4 -0.25 0 -0.3 curveto
+	0 -0.05 0.25 270 90 arc 0 0.1 0.1 90 270 arc stroke grestore
+} bind def
+
+/timesig {	% usage (eg. for 6/8): x y_top staveheight (6) (8) timesig
+	/botnum exch def /topnum exch def
+	/staveheight exch def /y_top exch def /x exch def
+	gsave /Times-Bold findfont  staveheight 0.6 mul scalefont  setfont
+	x topnum stringwidth pop 0.5 mul sub y_top staveheight 0.45 mul sub moveto
+	topnum show
+	x botnum stringwidth pop 0.5 mul sub y_top staveheight 0.95 mul sub moveto
+	botnum show grestore
+} bind def
+
+/sharp {	% usage: x y staveheight sharp
+	gsave 3 1 roll translate dup scale newpath
+	0.07 setlinewidth -0.13 0.02 moveto 0.13 0.12 lineto
+	-0.13 -0.12 moveto 0.13 -0.02 lineto stroke newpath
+	0.03 setlinewidth -0.065  -0.3 moveto  -0.065  0.24 lineto
+	0.065  -0.24 moveto  0.065  0.28 lineto stroke grestore
+} bind def
+
+/natural {	% usage: x y staveheight natural
+	gsave 3 1 roll translate dup scale newpath
+	0.07 setlinewidth -0.09 0.04 moveto 0.09 0.15 lineto
+	-0.09 -0.15 moveto 0.09 -0.04 lineto stroke
+	newpath 0.03 setlinewidth -0.09  -0.15 moveto  -0.09  0.3 lineto
+	0.09  -0.3 moveto  0.09  0.15 lineto stroke grestore
+} bind def
+
+/flat {	% usage: x y staveheight flat
+	gsave 3 1 roll translate dup scale newpath
+	0.03 setlinewidth  -0.07  0.45 moveto  -0.07  -0.15 lineto stroke
+	newpath 0.05 setlinewidth
+	-0.07 -0.15 moveto 0.15 0 0.3 0.2 -0.07 0.08 curveto stroke grestore
+} bind def
+
+/doublesharp { % usage: x y staveheight doublesharp
+	gsave 3 1 roll translate dup scale newpath
+	-.13 -.13 moveto -.11 -.03 lineto -.03 -.02 lineto
+	-.03  .02 lineto -.11  .03 lineto
+	-.13  .13 lineto -.03  .11 lineto -.02  .03 lineto
+	 .02  .03 lineto  .03  .11 lineto
+	 .13  .13 lineto  .11  .03 lineto  .03  .02 lineto
+	 .03 -.02 lineto  .11 -.03 lineto
+	 .13 -.13 lineto  .03 -.11 lineto  .02 -.03 lineto
+	-.02 -.03 lineto -.03 -.11 lineto
+	closepath fill grestore
+} bind def
+
+/hemidemisemiquaverrest {  % x y staveheight hemidemisemiquaverrest  3.2m
+	gsave 3 1 roll translate dup scale 0.03 setlinewidth
+	newpath -0.125  0.180  0.048 0 360 arc fill
+	newpath  0      0.37   0.22  245 295 arc -0.05 -0.29 lineto stroke
+	newpath -0.137  0.065  0.048 0 360 arc fill
+	newpath -0.03   0.27   0.22 245 295 arc stroke
+	newpath -0.149 -0.060  0.048 0 360 arc fill
+	newpath -0.06   0.135  0.21 245 292 arc stroke
+	newpath -0.161 -0.175  0.048 0 360 arc fill
+	newpath -0.08   0.02   0.20 245 290 arc stroke grestore
+} bind def
+
+/demisemiquaverrest {	% usage: x y staveheight demisemiquaverrest
+	gsave 3 1 roll translate dup scale 0.03 setlinewidth
+	newpath -0.125  0.18   0.048 0 360 arc fill
+	newpath  0      0.37   0.22  245 295 arc -0.05 -0.21 lineto stroke
+	newpath -0.135  0.065  0.048 0 360 arc fill
+	newpath -0.04   0.275  0.22 245 295 arc stroke
+	newpath -0.145 -0.065  0.048 0 360 arc fill
+	newpath -0.07   0.135  0.21 245 292 arc stroke grestore
+} bind def
+
+/semiquaverrest {	% usage: x y staveheight semiquaverrest
+	gsave 3 1 roll translate dup scale 0.03 setlinewidth
+	newpath -0.125  0.0625 0.05 0 360 arc fill
+	newpath  0 0.25 0.22   245 295 arc -0.05 -0.22 lineto stroke
+	newpath -0.135 -0.07   0.05 0 360 arc fill
+	newpath -0.04   0.14   0.22 245 295 arc stroke grestore
+} bind def
+
+/quaverrest {	% usage: x y staveheight quaverrest
+	gsave 3 1 roll translate dup scale 0.04 setlinewidth
+	newpath -0.125 0.0625 0.05 0 360 arc fill
+	newpath 0 0.25 0.22 245 295 arc -0.05 -0.2 lineto stroke
+	grestore
+} bind def
+
+/crochetrest {	% usage: x y staveheight crochetrest
+	gsave 3 1 roll translate dup scale newpath
+	newpath 0.04 setlinewidth -0.1 0.3 moveto 0.1 0.1 lineto stroke
+	newpath 0.08 setlinewidth 0.03 0.17 moveto -0.07 0.07 lineto stroke
+	newpath 0.04 setlinewidth -0.098 0.098 moveto 0.08 -0.08 lineto
+	-0.1 -0.05 -0.2 -0.24 0.08 -0.3 curveto stroke grestore
+} bind def
+
+/minimrest {	% usage: x y staveheight minimrest
+	gsave 3 1 roll translate dup scale newpath
+	0.07 setlinewidth -0.1 0.035 moveto 0.1 0.035 lineto stroke grestore
+} bind def
+
+/smbrest {	% usage: x y staveheight smbrest
+	gsave 3 1 roll translate dup scale newpath
+	0.09 setlinewidth -0.13 -0.045 moveto 0.13 -0.045 lineto stroke grestore
+} bind def
+
+/breverest {	% usage: x y staveheight breverest
+	gsave 3 1 roll translate dup scale newpath
+	0.25 setlinewidth -0.07 0.125 moveto 0.07 0.125 lineto stroke grestore
+} bind def
+
+/rightshow {	% usage: x y font fontsize (string) rightshow
+	/s exch def /fontsize exch def /font exch def /y exch def /x exch def
+	gsave font findfont  fontsize scalefont  setfont
+	x s stringwidth pop sub  y moveto s show grestore
+} bind def
+
+/leftshow {	% usage: x y font fontsize (string) leftshow
+	/s exch def /fontsize exch def /font exch def /y exch def /x exch def
+	gsave font findfont  fontsize scalefont  setfont
+	x y moveto s show grestore
+} bind def
+
+/centreshow { % usage: x y font fontsize (string) centreshow
+	/s exch def /fontsize exch def /font exch def 
+	gsave moveto font findfont fontsize scalefont setfont
+	gsave s false charpath flattenpath pathbbox grestore
+	exch 4 -1 roll pop pop s stringwidth pop -0.5 mul  % dx/2
+	3 1 roll sub 0.5 mul % dy/2
+	rmoveto s show grestore
+} bind def
+
+/centrexshow {  % usage: x y font fontsize (string) centrexshow
+	/s exch def /fontsize exch def /font exch def /y exch def /x exch def
+	gsave font findfont  fontsize scalefont  setfont
+	x s stringwidth pop 0.5 mul sub  y moveto s show grestore
+} bind def
+
+/barnumber {	% usage: x y staveheight (string) barnumber
+	/s exch def /staveheight exch def /y exch def /x exch def
+	gsave Helvetica-Bold findfont  staveheight 0.6 mul scalefont setfont
+	0.8 setgray x s stringwidth pop 0.5 mul sub  y moveto
+	s show grestore
+} bind def
+
+/crescendo {	% usage: x_left y_left x_right y_right staveheight crescendo
+	/staveheight exch def /y_right exch def /x_right exch def
+	/y_left exch def /x_left exch def
+	.015 staveheight mul setlinewidth newpath
+	x_right y_right staveheight 0.13 mul add moveto x_left y_left lineto 
+	x_right y_right staveheight 0.13 mul sub lineto stroke
+} bind def
+
+/diminuendo {	% usage: x_left y_left x_right y_right staveheight diminuendo
+	/staveheight exch def /y_right exch def /x_right exch def
+	/y_left exch def /x_left exch def
+	.015 staveheight mul setlinewidth newpath
+	x_left y_left staveheight 0.13 mul add moveto x_right y_right lineto 
+	x_left y_left staveheight 0.13 mul sub lineto stroke
+} bind def
+
+/slur {	% usage: x_l y_l x_r y_r updown staveheight slur
+	/staveheight exch def /updown exch def   % updown = +1 or -1
+	/y_r exch def /x_r exch def /y_l exch def /x_l exch def
+	/dx x_r x_l sub def /dy y_r y_l sub def
+	dx staveheight 2.0 mul lt {	% short round tie
+		/x_lmid x_l x_l add x_r add 0.3333 mul def
+		/y_lmid y_l y_l add y_r add 0.3333 mul def
+		/x_rmid x_l x_r add x_r add 0.3333 mul def
+		/y_rmid y_l y_r add y_r add 0.3333 mul def
+		/dy_top staveheight 0.37 mul updown mul def
+		/dy_bot staveheight 0.30 mul updown mul def
+	} {	% longer flatter tie
+		/x_lmid x_l staveheight add def
+		/y_lmid y_l dy staveheight mul dx div add def
+		/x_rmid x_r staveheight sub def
+		/y_rmid y_r dy staveheight mul dx div sub def
+		/dy_top staveheight 0.52 mul updown mul def
+		/dy_bot staveheight 0.46 mul updown mul def
+	} ifelse
+	newpath x_l y_l moveto
+	x_lmid y_lmid dy_top add  x_rmid y_rmid dy_top add  x_r y_r curveto
+	x_rmid y_rmid dy_bot add  x_lmid y_lmid dy_bot add  x_l y_l curveto
+	closepath fill
+} bind def
+
+/fermata {	% usage: x y staveheight fermata
+	gsave 3 1 roll translate dup scale
+	0 -0.11 translate
+	newpath 0 0 .07 0 360 arc fill
+	newpath -.33 -.06 moveto -.33 .41 .33 .41 .33 -.06 curveto
+	.31 -.06 lineto .31 .31 -.31 .31 -.31 -.06 curveto -.33 -.06 lineto fill
+	grestore
+} bind def
+/mordent {	% usage: x y staveheight mordent
+	gsave 3 1 roll translate 0.035 mul dup scale
+	0.5 setlinewidth newpath -8 -2 moveto -4 2 lineto -2 -2 moveto 2 2 lineto
+	4 -2 moveto 8 2 lineto 0 -4 moveto 0 4 lineto stroke
+	newpath 1 1 moveto 2 2 lineto 5 -1 lineto 4 -2 lineto closepath fill
+	newpath -1 -1 moveto -2 -2 lineto -5 1 lineto -4 2 lineto closepath fill
+	grestore
+} bind def
+/trill {	% usage: x y staveheight trill
+	/staveheight exch def gsave translate 1.2 1 scale
+	0 0 /$BoldItalicFont staveheight 0.5 mul (tr) centreshow grestore
+} bind def
+/trsharp {	% usage: x y staveheight trsharp
+	/staveheight_sh exch def /y_sh exch def /x_sh exch def
+	x_sh y_sh staveheight_sh trill
+	x_sh staveheight_sh .28 mul add y_sh staveheight_sh .11 mul add
+	staveheight_sh 0.7 mul sharp
+} bind def
+/trflat {	% usage: x y staveheight trflat
+	/staveheight_trf exch def /y_trf exch def /x_trf exch def
+	x_trf y_trf staveheight_trf trill
+	x_trf staveheight_trf .28 mul add y_trf staveheight_trf .11 mul add
+	staveheight_trf 0.7 mul flat
+} bind def
+/trnat {	% usage: x y staveheight trnat
+	/staveheight_trn exch def /y_trn exch def /x_trn exch def
+	x_trn y_trn staveheight_trn trill
+	x_trn staveheight_trn .28 mul add y_trn staveheight_trn .11 mul add
+	staveheight_trn 0.7 mul natural
+} bind def
+/turn {	% usage: x y staveheight turn
+	gsave 3 1 roll translate 0.8 mul dup scale
+	newpath .2 .09 .06 0 360 arc fill newpath .25 .15 moveto
+	.33 .06 .33 -.06 .23 -.13 curveto 0.1 -.13 .05 -.1 0 -.05 curveto
+	0 .05 lineto .05 .01 .1 -.09 .23 -.09 curveto
+	.28 -.05 .29 .05 .25 .13 curveto closepath fill
+	newpath -.2 -.09 .06 0 360 arc fill newpath -.25 -.15 moveto
+	-.33 -.06 -.33 .06 -.23 .13 curveto -0.1 .13 -.05 .1 0 .05 curveto
+	0 -.05 lineto -.05 -.01 -.1 .09 -.23 .09 curveto
+	-.28 .05 -.29 -.05 -.25 -.13 curveto closepath fill grestore
+} bind def
+/tenuto {  % usage: x y staveheight tenuto
+	gsave 3 1 roll translate dup scale newpath 0.05 setlinewidth
+	-0.13 0 moveto 0.13 0 lineto stroke grestore
+} bind def
+/emphasis {  % usage: x y staveheight emphasis
+	gsave 3 1 roll translate dup scale newpath 0.03 setlinewidth
+	-0.18 0.08 moveto 0.18 0 lineto -0.18 -0.08 lineto stroke grestore
+} bind def
+/segno {  % usage: x y staveheight segno
+	gsave 3 1 roll translate 1.3 mul dup -1 mul scale 80 rotate 0 0 1 turn
+	newpath .03 setlinewidth 0.1 0.2 moveto -0.1 -0.2 lineto stroke
+	newpath -.05 0.16 .035 0 360 arc fill
+	newpath .05 -0.16 .035 0 360 arc fill grestore
+} bind def
+/upbow {  % usage: x y staveheight upbow
+	gsave 3 1 roll translate dup scale newpath 0.03 setlinewidth
+	0.08 0.17 moveto 0.0 -0.19 lineto -0.08 0.17 lineto stroke grestore
+} bind def
+/downbow {  % usage: x y staveheight downbow
+	gsave 3 1 roll translate dup scale newpath 0.03 setlinewidth
+	-0.12 -0.15 moveto -0.12 0.15 lineto stroke
+	0.12 -0.15 moveto 0.12 0.15 lineto stroke
+	newpath .10 setlinewidth -0.12 0.12 moveto 0.12 0.12 lineto stroke
+	grestore
+} bind def
+/guitar_string {   % usage: n x y staveheight guitar_string
+	/staveheight exch def gsave translate staveheight dup scale
+	/n exch (    ) cvs def
+	0 0 (Helvetica-Bold) 0.36 n centreshow
+	newpath 0 0 0.22 0 360 arc .042 setlinewidth stroke grestore
+} bind def
+%%EndResource
+
+/Times-Roman findfont dup length dict begin
+	{ 1 index /FID ne { def } { pop pop } ifelse } forall
+	/Encoding ISOLatin1Encoding def currentdict
+end /Times-Roman-ISO exch definefont pop
+
+/Times-Bold findfont dup length dict begin
+	{ 1 index /FID ne { def } { pop pop } ifelse } forall 
+	/Encoding ISOLatin1Encoding def currentdict
+end /Times-Bold-ISO exch definefont pop
+	
+/Times-BoldItalic findfont dup length dict begin
+	{ 1 index /FID ne { def } { pop pop } ifelse } forall 
+	/Encoding ISOLatin1Encoding def currentdict
+end /Times-BoldItalic-ISO exch definefont pop
+	
+/Times-Italic findfont dup length dict begin
+	{ 1 index /FID ne { def } { pop pop } ifelse } forall 
+	/Encoding ISOLatin1Encoding def currentdict
+end /Times-Italic-ISO exch definefont pop
+
+%%EndProlog
+]]
+end
+
+
+
+---- Here go all the functions ----
+
+function warn(...)
+	local a = {}
+	for k,v in pairs{...} do table.insert(a, tostring(v)) end
+	io.stderr:write(table.concat(a),'\n') ; io.stderr:flush()
+end
+function warn_ln(...) warn(' line ',LineNum,': ', ...) end
+function warning(...) warn('warning: ', ...) end
+function die(...) warn(...) ;  os.exit(1) end
+function dump(x)
+	local function tost(x)
+		if type(x) == 'table' then return 'table['..tostring(#x)..']' end
+		if type(x) == 'string' then return "'"..x.."'" end
+		if type(x) == 'function' then return 'function' end
+		if x == nil then return 'nil' end
+		return tostring(x)
+	end
+	if type(x) == 'table' then
+		local n = 0 ; for k,v in pairs(x) do n=n+1 end
+		if n == 0 then return '{}' end
+		if n == #x then
+			local a = {} ; for i,v in ipairs(x) do a[i] = tost(v) end
+			return '{ '..table.concat(a, ', ')..' }'
+		end
+		local a = {} ; for k,v in pairs(x) do
+			a[#a+1] = tostring(k)..'='..tost(v)
+		end
+		return '{ '..table.concat(a, ', ')..' }'
+	end
+	return tost(x)
+end
+function round(x) return math.floor(x+0.5) end
+function abs(x) if x<0 then return 0-x else return x end end
+function is_empty(t)
+	local n=0 ; for k,v in pairs(t) do n=n+1; break end ; return n == 0
+end
+function split(s, pattern, maxNb) -- http://lua-users.org/wiki/SplitJoin
+	if not s or string.len(s)<2 then return {s} end
+	if not pattern then return {s} end
+	if maxNb and maxNb <2 then return {s} end
+	local result = { }
+	local theStart = 1
+	local theSplitStart,theSplitEnd = find(s,pattern,theStart)
+	local nb = 1
+	while theSplitStart do
+		table.insert( result, sub(s,theStart,theSplitStart-1) )
+		theStart = theSplitEnd + 1
+		theSplitStart,theSplitEnd = find(s,pattern,theStart)
+		nb = nb + 1
+		if maxNb and nb >= maxNb then break end
+	end
+	table.insert( result, sub(s,theStart,-1) )
+	return result
+end
+function printf (...) print(string.format(...)) end
+function print_sp (...)  -- like print() but uses spaces not tabs
+	local a2 = {}
+	for i,v in ipairs({...}) do table.insert(a2, tostring(v)) end
+	print(concat(a2, ' '))
+end
+function sorted_keys(t, f)
+	local a = {}
+	for k,v in pairs(t) do a[#a+1] = k end
+	table.sort(a, f)
+	return  a
+end
+
+function parse_options(line)  -- delimits by '-' respects quoting by "
+	if not line or line == '' then return {} end
+	local quotedline = gsub(line, '"[^"]-"', function(s)
+		return gsub(s, '-', '\a')
+	end)
+	local a = split(quotedline, '-')
+	for i=1,#a do a[i] = gsub( gsub(a[i],'\a','-'), '"','') end
+	return a
+end
+
+function parse_line(line, keep)   -- only respects quoting by "
+	local quotedline = gsub(line, '%a"[^"]-"', function(s)
+		return gsub(s, '[- ]', {[' ']='\a', ['-']='\b'})
+	end)
+	local a = split(quotedline, '%s+')
+	for i=1,#a do a[i]=gsub(a[i],'[\a\b]',{['\a']=' ',['\b']='-'}) end
+	return a
+end
+
+------------------------- General muscript stuff -----------------------
+
+function initialise ()
+	if not Quiet then TTY = assert(io.open('/dev/tty', 'a+')) end
+	Epsilon = 0.0005  -- should be less than .001 for correct word spacing
+	Ipage = 0
+	-- pitch to height-on-stave assocarray is defined for the alto clef ...
+	local raw_notetable = {}
+	if MIDI then
+		raw_notetable = {  -- defined for alto clef
+			['f~~']=89, ['e~~']=88, ['d~~']=86, ['c~~']=84, ['b~']=83,
+			['a~']=81, ['g~']=79, ['f~']=77, ['e~']=76, ['d~']=74, ['c~']=72,
+			b=71,   a=69,  g=67,  f=65,  e=64,  d=62,  c=60,
+			B=59,   A=57,  G=55,  F=53,  E=52,  D=50,  C=48,
+			B_=47,  A_=45, G_=43, F_=41, E_=40, D_=38, C_=36,
+			B__=12, A__=10,
+		}
+		for k,v in pairs(raw_notetable) do
+			NoteTable[k]       = v
+			NoteTable[k..'#']  = v + 1
+			NoteTable[k..'b']  = v - 1
+			NoteTable[k..'##'] = v + 2
+			NoteTable[k..'bb'] = v - 2
+			NoteTable[k..'n']  = v  -- the A#__ order is a syntax error
+		end
+	end
+	-- Ytable also needed by Midi, to keep track of stemup e.g. for slurs/ties
+	Ytable = {
+		['f~~']=1.625, ['e~~']=1.5, ['d~~']=1.375, ['c~~']=1.25, ['b~']=1.125,
+		['a~']=1.0, ['g~']=0.875, ['f~']=0.75, ['e~']=0.625, ['d~']=0.5,
+		['c~']=0.375, b=0.25, a=0.125, g=0.01, f=-0.125, e=-0.25,
+		d=-0.375, c=-0.5, B=-0.625, A=-0.75, G=-0.875, F=-1.0,
+		E=-1.125, D=-1.25, C=-1.375, B_=-1.5, A_=-1.625, G_=-1.75,
+		F_=-1.875, E_=-2.0, D_=-2.125, C_=-2.25, B__=-2.375, A__=-2.5,
+	}
+	-- note durations ...  # 3.2 hds is .0625, not .0725
+	local en = { hds=.0625, dsq=.125, smq=.25,
+	  qua=.5, cro=1.0, min=2.0, smb=4.0, bre=8.0, }
+	for k,v in pairs(en) do
+		Nbeats[k]      = v
+		Nbeats[k..'2'] = v * 0.75       -- duplet
+		Nbeats[k..'3'] = v * 0.66667    -- triplet
+		Nbeats[k..'4'] = v * 0.75       -- quadruplet
+		Nbeats[k..'5'] = v * 0.8        -- quintuplet
+		Nbeats[k..'6'] = v * 0.66667    -- sextuplet
+		Nbeats[k..'7'] = v * 0.57142857 -- septuplet  3.1z
+	end
+	local a = {} ; for k,v in pairs(Nbeats) do   -- dotted notes
+		a[k..'.'  ] = v * 1.5
+		a[k..'..' ] = v * 1.75
+		a[k..'...'] = v * 1.875
+	end
+	for k,v in pairs(a) do Nbeats[k]=v end
+	a = {} ; for k,v in pairs(Nbeats) do   -- tremolandi
+		if find(k,'^cro') or find(k,'^min') or find(k,'^smb') then
+			a[k..'/'  ] = v   -- tremolandi
+			a[k..'//' ] = v
+			a[k..'///'] = v
+		end
+	end
+	for k,v in pairs(a) do Nbeats[k]=v end
+	a = {} ; for k,v in pairs(Nbeats) do   -- small notes
+		a[k..'-s']  = v
+	end
+	for k,v in pairs(a) do Nbeats[k]=v end
+	local en2intl = { hds='64',dsq='32',smq='16',
+	 qua='8', cro='4',min='2',smb='1', }
+	for i,key in pairs(sorted_keys(Nbeats)) do -- International-style rhythm
+		-- sort means smb gets overwritten by smq, so 16-s maps to smq-s, 2.9n
+		local s1,s2
+		s1,s2 = match(key, '^([a-u][a-u][a-u])([2-6].*)$') ; if s2 then
+			if en2intl[s1] then Intl2en[en2intl[s1]..s2] = key end
+		else
+			s1,s2 = match(key, '^([a-u][a-u][a-u])(.*)$') ; if s2 then
+				if en2intl[s1] then Intl2en[en2intl[s1]..s2] = key end
+			end
+		end
+	end
+	-- foreach (sort keys %Intl2en) { warn "Intl2en{$_}=$Intl2en{$_}\n"; }
+	Options = {
+		down='downbow', ['.']='dot', emph='emphasis', gs='gs',
+		mordent='mordent', stac='dot', stacc='dot',
+		ten='tenuto', tenuto='tenuto',
+		tr='trill', ['tr#']='trsharp', trb='trflat', trn='trnat',
+		turn='turn', up='upbow',
+	}
+--	SlurOrTie = {
+--		['(']='starttie',
+--		['{']='startslur',
+--		[')']='endtie',
+--		['}']='endslur',
+--	}
+	SlurOrTieShift = {
+		[""]=0, ["'"]=1, ["''"]=2, ["'''"]=3, ["''''"]=4,
+		[","]=-1, [",,"]=-2, [",,,"]=-3, [",,,,"]=-4,
+	}
+	if MIDI then
+		MidiScore        = {}     -- a LoL
+		MidiTimesig      = ''
+		TicksPerMidiBeat = TPC
+		TicksAtBarStart  = 0
+		TicksThisBar     = 0      -- so as not to delay the start
+		MidiBarParts     = '2.4'  -- default guesses 4/4 at 100 cro/min
+		Stave2channels   = {}
+		Istave           = '1'
+	elseif XmlOpt then
+		Stave2channels   = {}
+		XmlTimesig      = '4/4'
+		XmlDuration={
+			hds='64th',dsq='32nd',smq='16th',qua='eighth',
+			cro='quarter', min='half',smb='whole',bre='breve'
+		}
+		local a = {} ; for k,v in pairs(XmlDuration) do
+			a[k..'3'] = v
+		end
+		for k,v in pairs(a) do XmlDuration[k]=v end
+		a = {} ; for k,v in pairs(XmlDuration) do
+			a[k] = '<type>'..v..'</type>'
+		end
+		for k,v in pairs(a) do XmlDuration[k]=v end
+		a = {} ; for k,v in pairs(XmlDuration) do    -- dotted notes
+			a[k..'.'  ] = v..'<dot/>'
+			a[k..'..' ] = v..'<dot/><dot/>'
+			a[k..'...'] = v..'<dot/><dot/><dot/>'
+		end
+		for k,v in pairs(a) do XmlDuration[k]=v end
+		a = {} ; for k,v in pairs(XmlDuration) do
+			if find(k,'^cro') or find(k,'^min') or find(k,'^smb') then
+				a[k..'/'  ] = v
+				a[k..'//' ] = v
+				a[k..'///'] = v
+			end
+		end
+		for k,v in pairs(a) do XmlDuration[k]=v end
+		a = {} ; for k,v in pairs(XmlDuration) do
+			if find(k,'^hds') or find(k,'^dsq') or find(k,'^smq') or
+			  find(k,'^qua') or find(k,'^cro') or find(k,'^min') or
+			  find(k,'^smb') then
+				a[k..'-s']  = v   -- small notes
+			end
+		end
+		for k,v in pairs(a) do XmlDuration[k]=v end
+		XmlAccidental = {
+			['#']='sharp', ['##']='double-sharp',
+			['b']='flat',  ['bb']='flat-flat', ['n']='natural',
+		}
+		Accidental2alter = {
+			['#']=1, ['##']=2, ['b']=-1, ['bb']=-2, ['n']=0, ['']=0,
+		}
+		Midline = {
+			treble8va=41, treble=34, treble8vab=27, alto=28,
+			tenor=26, bass8va=29, bass=22, bass8va=15,
+		}
+		Line2step = {
+			['0']='C', ['1']='D', ['2']='E', ['3']='F',
+			['4']='G', ['5']='A', ['6']='B',
+		}
+		Xml['measure_number'] = '0'
+		Xml['backup'] = '0'
+	end
+end
+
+local function is_a_clef (s)
+	if s== 'treble' or s=='treble8va' or s=='treble8vab' or s== 'alto' or
+	   s=='tenor'or s=='bass' or s=='bass8va' or s=='bass8vab' then
+		return true
+	end
+	return false
+end
+
+local function is_a_note (s)
+	s = gsub(s, "[{}()][',]*%d?", "") -- strip slurs and ties off
+	s = gsub(s, "[%[%]]%d?", "") -- strip [ ] [1 [1 beam characters off
+	s = gsub(s, "[<>]", "")      -- strip < and > chord characters off
+	s = gsub(s, "-.*$", "")      -- strip -xxx options off
+	if find(s,"^[A-Ga-g][nbrl#,'x+]*$") then return true end
+	if find(s,"^[A-G][_nbrl#,'x+]*$")   then return true end
+	if find(s,"^[a-g][~nbrl#,'x+]*$")   then return true end
+	return false
+end
+
+---------------------------- PostScript stuff --------------------------
+
+local function print_tty (s)
+	if not TTY then return end
+	TTY:write(s) ; TTY:flush()
+end
+
+local function boundingbox (w, h)
+	local a4w = 210 * 72/25.4
+	local a4h = 297 * 72/25.4
+	lmar   =40*w/a4w; rmar   =565*w/a4w
+	BotMar =60*h/a4h; TopMar =781*h/a4h
+	FootMar=30*h/a4h; headmar=811*h/a4h  -- for header and footer text
+	Box_H = h
+	Box_W = w
+end
+
+function print_quoted (s)  -- PiL p.210
+	-- WARNING! only works for global variables :-(
+	-- stackoverflow.com/questions/9483741/read-dynamic-variable-names-in-lua
+	-- note that  load('local tmp = '..n)  evaluates n in the global context
+	local qs = gsub(s, "$(%w+)", function(n) return tostring(_G[n]) end)
+	print(qs)  -- reject gsub's 2nd return-val
+end
+
+local function ps_prolog ()
+	if PS_prologAlready or MIDI or XmlOpt then return end
+	if not Strip then   -- prepend the ps header ...
+		if Box_W and Box_H then
+			print('%!PS-Adobe.3.0 EPSF-3.0\n%%BoundingBox 0 0 '
+			  ..tostring(Box_W)..' '..tostring(Box_H))
+		else
+			print '%!PS-Adobe-3.0'
+		end
+		print_quoted(PS_Prolog)
+	end
+	PS_prologAlready = true
+end
+
+local function ps_finish_ties (right)
+	if not right then right = rmar + TieOverhang*StvHgt end
+	if not Nstaves[Isyst] then return end
+	for istave = 1,Nstaves[Isyst] do
+		local x_left, y_left, x_right, y_right
+		for itie = 1,9,2 do  -- first, ties above
+			for i,th_type in ipairs({'slur','tie'}) do   -- 2.7j
+				local key = concat({th_type,Isyst,istave,itie},' ')
+				x_left = Xstart[key] ; y_left = Ystart[key]
+				if x_left and y_left then
+					y_right = y_left
+					x_right = right
+					if (x_right - x_left) > StvHgt then
+						x_left  = x_left + 0.75*BlackBlobHalfWidth*StvHgt
+						x_right = x_right - TieAfterNote*StvHgt
+					end
+					printf("%g %g %g %g %g 1.0 slur",
+					  x_left, y_left, x_right, y_right, StvHgt)
+					Xstart[key] = nil ; Ystart[key] = nil
+				end
+			end
+		end
+		for itie = 2,8,2 do    -- then, ties below
+			for i,th_type in ipairs({'slur','tie'}) do   -- 2.7j
+				local key = concat({th_type,Isyst,istave,itie},' ')
+				x_left = Xstart[key] ; y_left = Ystart[key]
+				if x_left and y_left then
+					y_right = y_left
+					x_right = right
+					if (x_right - x_left) > StvHgt then
+						x_left  = x_left + 0.75*BlackBlobHalfWidth*StvHgt
+						x_right = x_right - TieAfterNote*StvHgt
+					end
+					printf("%g %g %g %g %g -1.0 slur",
+					  x_left, y_left, x_right, y_right, StvHgt)
+					Xstart[key] = nil ; Ystart[key] = nil
+				end
+			end
+		end
+	end
+end
+
+local function systems (nsystems, sizes)
+	-- sets globals: Lmargin, Rmargin, nstaves, Ystave, StaveHeight, StvHgt,
+	-- GapHeight, Nblines, ybline, blineheight, isyst
+	-- print('systems: nsystems =', nsystems)
+	if MIDI then return end
+	if nsystems and not sizes then  -- impose some defaults
+		nsystems = tonumber(nsystems)
+		if     nsystems > 6 then sizes = '/19/'
+		elseif nsystems > 4 then sizes = '/19 30 19/'
+		elseif nsystems > 3 then sizes = '/19 30 19 30 19/'
+		elseif nsystems > 2 then sizes = '/19 30 19 30 19 30 19/'
+		else   sizes = '/19 30 19 30 19 30 19 30 19 30 19/'
+		end
+	elseif not nsystems and not sizes and
+		RememberNsystems and RememberSystemsSizes then
+		sizes    = RememberSystemsSizes
+		nsystems = RememberNsystems
+		-- Nsystems = RememberNsystems
+	else
+		nsystems = tonumber(nsystems)
+		RememberSystemsSizes = sizes     -- global
+		RememberNsystems     = nsystems  -- global
+		RememberHeader       = {}        -- global
+	end
+	local systms = split(sizes, '%s*/%s*')
+	local topgap = table.remove(systms,1); if topgap=='' then topgap=0 end
+	local botgap = table.remove(systms) -- botgap is unused
+	-- print('topgap =',topgap, 'systms =',DataDumper(systms))
+	if XmlOpt then   -- XmlOpt: see layout.dtd -
+		Ipage = Ipage + 1
+		local barlinesandgaps = {} ; local istave;
+		for isyst = 1,nsystems do
+			StaveHeight[isyst] = {}
+			GapHeight[isyst] = {}
+			istave = 0
+			local igap = 1
+			local isastave = true  -- the first number will be a stave height
+			barlinesandgaps = split(systms[isyst], '%s+', 9999)
+			for i1,word in ipairs(barlinesandgaps) do
+				local stavesandgaps = split(word, '-', 9999)
+				for i2,staveorgap in ipairs(stavesandgaps) do
+					if isastave then
+						istave = istave + 1
+						StaveHeight[isyst][istave] = staveorgap
+						isastave = false  -- the next will be a gap
+					else  -- its a gap
+						GapHeight[isyst][igap] = staveorgap
+						isastave = true   -- the next will be a stave
+						igap = igap + 1
+					end
+				end
+			end
+			Nstaves[isyst] = istave
+		end
+		Isyst = 0
+		return
+	end
+	if Ipage > 0 then
+		ps_finish_ties()
+		print("pgsave restore\nshowpage")
+		print_tty("\n")
+	end
+	Ipage = Ipage + 1
+	print("%%Page: "..tostring(Ipage).." "..tostring(Ipage))
+	print("%%BeginPageSetup\n/pgsave save def\n%%EndPageSetup")
+	if PageSize == 'letter' then
+		printf("%g 0 translate 1.0 %g scale",LetterMargin,LetterFactor)
+	elseif PageSize == 'compromise' then  -- a4 width, letter height
+		print "4 0 translate 1.0 0.95 scale";
+	elseif PageSize == 'auto' then  -- autodetect
+		print "/pageheight currentpagedevice (PageSize) get 1 get def"
+		print "pageheight 800 lt pageheight 785 gt and {"
+		printf("\t%g 0 translate 1.0 %g scale\n} if",LetterMargin,LetterFactor)
+	end
+	print_tty("page "..tostring(Ipage)..", system")
+
+	for i=(#systms+1),nsystems do table.insert(systms, systms[#systms]) end
+	--print('systms =',DataDumper(systms))
+
+	local totsyswidth = 0.0   -- initialise counter for all systems on page
+	local barlinesandgaps = {}
+	local ngaps    = {}
+	for isyst=1,nsystems do -- for each system
+		local syswidth = 0.0  -- this system width (includes all gaps)
+		Lmargin[isyst] = lmar;
+		Rmargin[isyst] = rmar;
+		barlinesandgaps = split( systms[isyst], '%s+', 9999);
+		local istave = 0
+		-- print('barlinesandgaps =',DataDumper(barlinesandgaps))
+		local igap     = 1
+		local ibline   = 0
+		local isastave = true  -- the first number will be a stave height
+		YblineTop[isyst]   = {}
+		YblineBot[isyst]   = {}
+		StaveHeight[isyst] = {}
+		GapHeight[isyst]   = {}
+		Ystave[isyst]      = {}
+		for i,word in ipairs(barlinesandgaps) do -- loop over barlines & gaps
+			if isastave then
+				ibline = ibline + 1
+				YblineTop[isyst][ibline] = syswidth  -- will invert later
+			end
+			local stavesandgaps = split(word, '-', 9999)
+			for i,v in ipairs(stavesandgaps) do
+				local staveorgap = tonumber(v)
+				totsyswidth = totsyswidth + staveorgap
+				syswidth    = syswidth + staveorgap
+				if isastave then
+					istave = istave + 1
+					StaveHeight[isyst][istave] = staveorgap
+					if not MaxStaveHeight[isyst] then
+						MaxStaveHeight[isyst] = 0
+					end
+					if StaveHeight[isyst][istave] > MaxStaveHeight[isyst] then
+						MaxStaveHeight[isyst] = StaveHeight[isyst][istave]
+					end
+					isastave = false  -- the next will be a gap
+				else  -- its a gap
+					GapHeight[isyst][igap] = staveorgap
+					isastave = true   -- the next will be a stave
+					igap = igap + 1
+				end
+			end
+			if not isastave then
+				YblineBot[isyst][ibline] = syswidth  -- will invert later
+			end
+		end
+		Nstaves[isyst] = istave
+		Nblines[isyst] = ibline
+		ngaps[isyst]   = igap-1
+	end
+	-- adjust according to the average MaxStaveHeight
+	local total = 0; local num = 0   -- 3.1r
+	for k,v in pairs(MaxStaveHeight) do total = total+v;  num = num+1 end
+	if num>0 then
+		local av = total / num
+		HeaderFontSize = av * 9 / 19     -- 3.1r
+		TitleFontSize  = av * 17.5 / 19  -- 3.1r
+	end
+	-- so do the systems fit on the page ?
+	local systemgap
+	if nsystems == 1 then
+		systemgap = (TopMar-BotMar-totsyswidth-topgap)
+	else
+		systemgap = (TopMar-BotMar-totsyswidth-topgap) / (nsystems-1);
+	end
+	if systemgap < 0 then
+		die(string.format("\nSorry, won't fit: systemgap=%g\n", systemgap))
+		os.exit(1)
+	end
+	-- if systemgap is large, space is left also above top sys & below bot.
+	local Y
+	local excess = systemgap - AmpleSysGap*(TopMar-BotMar)
+	if nsystems == 1 then
+		Y = 0.5 * (TopMar+BotMar+totsyswidth) - topgap  -- 2.9m
+	elseif excess > 0 then
+		adjustment = excess * (nsystems-1) / (nsystems+1)
+		systemgap = systemgap - excess + adjustment
+		Y = TopMar - adjustment - topgap
+	else
+		Y = TopMar - topgap
+	end
+	-- for each system ...
+	for isyst=1,nsystems do
+		print("% system "..tostring(isyst)..
+		  " staves, initial barline, and brackets:")
+		local istave = 1; local igap = 1
+		local max_staveheight = 0
+		while true do	-- print the staves ...
+			Ystave[isyst][istave] = Y
+			if StaveHeight[isyst][istave] > max_staveheight then
+				max_staveheight = StaveHeight[isyst][istave]
+			end
+			printf("%g %g %g %g stave", Lmargin[isyst],
+			  Rmargin[isyst], Y, StaveHeight[isyst][istave])
+			Y = Y - StaveHeight[isyst][istave]
+			if istave >= Nstaves[isyst] then
+				printf("%g %g %g %g barline", Lmargin[isyst],
+				 Ystave[isyst][1], Y, StaveHeight[isyst][istave])
+				if igap<=ngaps[isyst] then Y=Y-GapHeight[isyst][igap] end
+				break
+			end
+			istave = istave + 1
+			Y = Y - GapHeight[isyst][igap]
+			igap = igap + 1
+		end
+		-- invert and adjust the barline tops and bottoms
+		-- $Nblines[Isyst}-- unless $YblineBot[Isyst,$ibline};
+		for ibline = 1,Nblines[isyst] do
+			YblineTop[isyst][ibline]=Ystave[isyst][1]-YblineTop[isyst][ibline]
+			YblineBot[isyst][ibline]=Ystave[isyst][1]-YblineBot[isyst][ibline]
+		end
+		-- and print the brackets
+		-- should use average (or max) StaveHeight
+		for i = 1,Nblines[isyst] do
+			printf("%g %g %g %g bracket",
+			 Lmargin[isyst] - max_staveheight*0.225,
+			 YblineTop[isyst][i], YblineBot[isyst][i], max_staveheight)
+		end
+		Y = Y - systemgap
+	end
+	Isyst = 0
+end
+
+local function escape_and_utf2iso (s)   -- 2.9b
+	if XmlOpt then
+		s = gsub(s, '& ', '&amp;')
+		s = gsub(s, '" ', '&quot;')
+		s = gsub(s, '< ', '&lt;')
+		s = gsub(s, '> ', '&gt;')
+	else
+		s = gsub(s, '([()])', '\\%1')
+	end
+	-- UTF-8 to ISO 8859-1, from "perldoc perluniintro"
+	-- This mangles a legit ISO &acirc;[\x80-\xBF] - but that's very rare!
+	-- http://lua-users.org/lists/lua-l/2015-02/msg00172.html
+	-- s = gsub(s, utf8.charpattern, function (c)
+	-- s =~ s/([\xC2\xC3])([\x80-\xBF])/chr(ord($1)<<6&0xC0|ord($2)&0x3F)/eg;
+	s = gsub(s, '[\xC2\xC3][\x80-\xBF]', function (c)
+		local iso_byte = 128
+		if sub(c,1,1) == '\xC3' then iso_byte = 192 end
+		iso_byte = iso_byte + bit32.band(string.byte(c,2),63)
+		return string.char(iso_byte)
+	end)
+	s = gsub(s, '\xC5\x92([a-z])', 'Oe%1')
+	s = gsub(s, '\xC5\x92', 'OE')
+	s = gsub(s, '\xC5\x93', 'oe')
+	return s
+end
+
+local function ps_rightfoot (s)
+	if MIDI or XmlOpt then die("ps_rightfoot called with MIDI or Xml set ") end
+	local str
+	if s then
+		str = escape_and_utf2iso(s)
+		RememberHeader['rightfoot'] = str
+	else
+		str = RememberHeader['rightfoot']
+		if not str then return end
+	end
+  print_sp(rmar,FootMar,'/'..ItalicFont,HeaderFontSize,'('..str..') rightshow')
+end
+
+local function ps_leftfoot (s)
+	if MIDI or XmlOpt then die("ps_leftfoot called with MIDI or Xml set ") end
+	local str
+	if s then
+		str = escape_and_utf2iso(s)
+		RememberHeader['leftfoot'] = str
+	else
+		str = RememberHeader['leftfoot']
+		if not str then return end
+	end
+   print_sp(lmar,FootMar,'/'..ItalicFont,HeaderFontSize,'('..str..') leftshow')
+end
+local function ps_innerhead (s)
+	if MIDI or XmlOpt then die("ps_innerhead called with MIDI or Xml set ") end
+	local str
+	if s then
+		str = escape_and_utf2iso(s)
+		RememberHeader['innerhead'] = str
+	else
+		if RememberHeader['title'] then   -- 2.9g
+			str = RememberHeader['title']
+			if RememberHeader['innerhead'] then
+				str = str..',  '..RememberHeader['innerhead']
+			end
+			-- RememberHeader['title'] = nil   -- why this ?
+		else
+			str = RememberHeader['innerhead']
+		end
+		if not str then return end
+	end
+	if (PageNum%2) > 0.5 then print_sp(
+		lmar,HeadMar,'/'..ItalicFont,HeaderFontSize,'('..str..') leftshow')
+	else  print_sp(
+		rmar,HeadMar,'/'..ItalicFont,HeaderFontSize,'('..str..') rightshow')
+	end
+end
+local function ps_lefthead (s)
+	if MIDI or XmlOpt then die("ps_lefthead called with MIDI or Xml set ") end
+	local str
+	if s then
+		str = escape_and_utf2iso(s)
+		RememberHeader['lefthead'] = str
+	else
+		str = RememberHeader['lefthead']
+		if not str then return end
+	end
+	print_sp(lmar,HeadMar,'/'..ItalicFont,HeaderFontSize,'('..str..') leftshow')
+end
+local function ps_righthead (s)
+	if MIDI or XmlOpt then die("ps_lefthead called with MIDI or Xml set ") end
+	local str
+	if s then
+		str = escape_and_utf2iso(s)
+		RememberHeader['righthead'] = str
+	else
+		str = RememberHeader['righthead']
+		if not str then return end
+	end
+  print_sp(rmar,HeadMar,'/'..ItalicFont,HeaderFontSize,'('..str..') rightshow')
+end
+local function ps_pagenum (str)
+	if MIDI or XmlOpt then die("ps_pagenum called with MIDI or Xml set ") end
+	-- if Xml, could also generate <print new-page="yes" page-number=""/>
+	-- See Mario Lang in ~/Mail/musicxml ...
+	str = gsub(str or '', '^%s+', '')
+	if str=='' then PageNum = PageNum + 1
+	elseif find(str, '^%d+$')	then PageNum = tonumber(str)
+	else warn_ln('pagenum '..str..' is not numeric'); return nil
+	end
+	RememberHeader['pagenum'] = PageNum
+	if (PageNum % 2) > 0.5 then	-- odd page number
+		printf("%d %d /%s %g (%d) rightshow",
+		  rmar, HeadMar, BoldFont, HeaderFontSize*1.2, PageNum)
+	else	 -- even page number
+		printf("%d %d /%s %g (%d) leftshow",
+		  lmar, HeadMar, BoldFont, HeaderFontSize*1.2, PageNum)
+	end
+end
+local function title (str)
+	if MIDI then return end
+	str = gsub(str, '^title%s*', '')
+	if XmlOpt then
+		-- XXX out of its xml place; can also be multiple. Maybe just print:
+		-- print "\t<work>\n\t\t<work-title>$str</work-title>\n\t</work>\n";
+		return;
+	else
+		RememberHeader['title'] = escape_and_utf2iso(str)
+		printf("%g %g /%s %g (%s) centreshow", 0.5*(lmar+rmar),
+		  HeadMar-5, BoldFont, TitleFontSize, RememberHeader['title'])
+	end
+end
+local function comment (s)
+	if MIDI then table.insert(MidiScore, {'marker', TicksAtBarStart, s})
+	elseif XmlOpt then return(1)
+	else print("% "..s)
+	end
+end
+
+local function ps_repeatmark (isyst, istave, x)
+	if MIDI or  XmlOpt then die('BUG: ps_repeatmark called with MIDI or Xml') end
+	printf("%g %g %g repeatmark",
+		x, Ystave[isyst][istave], StaveHeight[isyst][istave])
+end
+
+local function ps_barline (x, isyst, ibar)
+	local bartype = BarType[isyst][ibar]
+	local maxstvhgt = MaxStaveHeight[isyst]
+	-- draws a barline of type $type at $x. Types: 0 = simple, 1 = double,
+	-- add 2 for end-repeat, 4 for start-repeat, 8 for Segno, 16 for missing
+	if bartype > 15 then return end  -- 2.7g
+	if bartype > 7 then   -- Segno ...
+		printf("%g %g %g segno", x + .22*StaveHeight[isyst][1],
+			Ystave[isyst][1] + StaveHeight[isyst][1]*SegnoHeight, maxstvhgt)
+		bartype = bartype - 8
+	end
+	if bartype > 3 then   -- begin repeated section ...
+		for i = 1,Nstaves[isyst] do
+			local staveheight = StaveHeight[isyst][i]  -- 2.8b
+			ps_repeatmark(isyst, i, x+.6*SpaceForStartRepeat*staveheight)
+		end
+		bartype = bartype - 4
+	end
+	if bartype > 1 then   -- end repeated section ...
+		for i = 1,Nstaves[isyst] do
+			local staveheight = StaveHeight[isyst][i]  -- 2.8b
+			ps_repeatmark(isyst, i, x-0.6*SpaceForStartRepeat*staveheight)
+		end
+		bartype = bartype - 2;
+	end
+	if bartype == 0 then
+		for i = 1,Nblines[isyst] do
+			printf("%g %g %g %g barline", x, YblineTop[isyst][i],
+			 YblineBot[isyst][i], maxstvhgt)
+		end
+		return;
+	end
+	if bartype == 1 then
+		for i = 1,Nblines[isyst] do
+			local staveheight = StaveHeight[isyst][i]
+			printf("%g %g %g %g barline", x + 0.03*staveheight,
+			 YblineTop[isyst][i], YblineBot[isyst][i], 2.0*maxstvhgt)
+			printf("%g %g %g %g barline", x - 0.07*staveheight,
+			 YblineTop[isyst][i], YblineBot[isyst][i], maxstvhgt)
+		end
+		return
+	end
+	printf("%% ERROR: barline called with type = %d", type)
+	return
+end
+
+local function ps_beat2x (crossofar,crosperpart)
+	local ipart = 1 + math.floor(crossofar/crosperpart + Epsilon)
+	if ipart < #Xpart then
+		return (Xpart[ipart] + (Xpart[ipart+1] - Xpart[ipart]) *
+		  (crossofar - crosperpart*(ipart-1)) / crosperpart)
+	else
+		return (Xpart[ipart] - Xpart[ipart] *
+		  (crossofar - crosperpart*(ipart-1)) / crosperpart)
+	end
+end
+
+local function parse_note (s)
+	if not s then return end
+	local scopy = s -- just in case there's a warning-message
+	local r = {}    -- will return this
+	if find(s,']$')  then r['endbeam']=']';    s=gsub(s,']$','') end
+	if find(s,'>$')  then r['endchord']='>';   s=gsub(s,'>$','') end
+	-- local len = 1 + string.len(notebit)
+	if find(s,'^%[') then r['startbeam']='[';  s=gsub(s,'%[','') end
+	if find(s,'^<')  then r['startchord']='<'; s=gsub(s,'^<','') end
+	local notebit,options = table.unpack(split(s,'-', 2))
+	r['notebit'] = notebit
+	r['options'] = options
+	local s1,s2 =  match(notebit,'^([A-Ga-g][_~]*)([#bn]*)')
+	if s2 then
+		r['pitch']=s1; r['accidental']=s2
+		notebit = gsub(notebit,'^[A-Ga-g][_~]*[#bn]*','')
+	end
+	if notebit == '' then return r end
+	if find(notebit, "l") then
+		notebit, r['accidentalshift'] = gsub(notebit, 'l', '')
+	end
+	if find(notebit, "r") then
+		notebit, r['rightshift'] = gsub(notebit, 'r', '')
+	end
+	if find(notebit, "x") then
+		r['cross'] = 'x' ; notebit = gsub(notebit, 'x', '')
+	end
+	local beforeslur = gsub(notebit, "[{}()].*$", "")
+	local s1 = match(beforeslur, "([,'])") ; if s1 then
+		r['stem'] = s1
+		notebit = gsub(notebit, "^[^{}()]+", '')
+	end
+	if notebit == '' then return r end
+--	for slurtie in gmatch(notebit, "[{}%(%)][',]?%d+") do
+--		local s1,s2,s3 = match(slurtie, "([{}%(%)])([',]*)(%d)")
+--		if s1 and s3 then r[SlurOrTie[s1]] = s3 end
+--		if s2 ~= '' then r[s3..'shift'] = SlurOrTieShift[s2] end
+--	end
+	s1,s2 = match(notebit,"%(([',]*)(%d+)"); if s2 then
+		r['starttie'] = s2
+		if s1 and s1 ~= '' then r['starttieshift'] = SlurOrTieShift[s1] end
+	end
+	s1,s2 = match(notebit,"%)([',]*)(%d+)"); if s2 then
+		r['endtie'] = s2
+		if s1 and s1 ~= '' then r['endtieshift'] = SlurOrTieShift[s1] end
+	end
+	s1,s2 = match(notebit,"{([',]*)(%d+)"); if s2 then
+		r['startslur'] = s2
+		if s1 and s1 ~= '' then r['startslurshift'] = SlurOrTieShift[s1] end
+	end
+	s1,s2 = match(notebit,"}([',]*)(%d+)"); if s2 then
+		r['endslur'] = s2
+		if s1 and s1 ~= '' then r['endslurshift'] = SlurOrTieShift[s1] end
+	end
+	notebit = gsub(notebit, "[{}%(%)][',]*%d+", "")
+	if notebit == '' then return r end
+	warn_ln('bad note syntax in "',scopy,'" at "',notebit,'"')
+	return r
+end
+
+local function append_options (a,b)
+	if not b or b=='' then return a end
+	if not a or a=='' then return b end
+	return a..'-'..b
+end
+
+local function dypitch (pitch)
+	local y = Ytable[pitch]
+	if not y then warn_ln('unrecognisable pitch: ',pitch) ; return 0 end
+	if find(Stave2clef[Istave], '^treble') then y = y + 0.125
+	elseif Stave2clef[Istave] == 'tenor' then y = y + 0.25
+	elseif find(Stave2clef[Istave], '^bass') then y = y - 0.125
+	end
+	return y  -- how far is the pitch above the top line, in staveheights
+end
+
+local function ps_ypitch (pitch)
+	-- returns the Y coord of the pitch (eg Eb_, c#, f~) on the current stave
+	return Ystv + dypitch(pitch) * StvHgt
+end
+
+local function is_stemup (noteref)
+	local stem = noteref['stem'] ; local pitch = noteref['pitch']
+	local stemup = false
+	if     stem and find(stem, "'") then stemup = true
+	elseif stem and find(stem, ",") then stemup = false
+	elseif DefaultStem == "'" then stemup = true
+	elseif DefaultStem == "," then stemup = false
+	else
+		if dypitch(pitch) < -0.6 then stemup = true
+		else                          stemup = false
+		end
+	end
+	return stemup
+end
+
+local function ps_is_stemless ()
+	if find(CurrentPulseText,'^smb') or
+	   find(CurrentPulseText,'^bre') then return true
+	else return false end
+end
+
+-- if we could make a block containing ps_event(), ps_y_above_note() and
+-- ps_y_below_note() then LowestStemDown, LowestStemUp, LowestNoStem,
+-- HighestStemDown, HighestStemUp, HighestNoStem could be local to it
+
+local function ps_y_above_note () -- finds the y for options above the note ...
+	local y = 0 ; local ysmb
+	local fc = (OptionClearance+WhiteBlobHalfHeight) * StvHgt
+	if HighestStemUp > 0 then    -- from the calling context
+		y = HighestStemUp + (StemLength+OptionClearance) * StvHgt
+	elseif HighestStemDown then
+		y = HighestStemDown + fc
+	end
+	ysmb = (HighestNoStem or 0) + fc ;  if y < ysmb then y = ysmb end
+	return y
+end
+
+local function ps_y_below_note () -- finds the y for options below the note ...
+	local y = 0 ; local ysmb
+	local fc = (OptionClearance+WhiteBlobHalfHeight) * StvHgt
+	if LowestStemDown and LowestStemDown < 999 then  -- magic number
+		y = LowestStemDown - (StemLength+OptionClearance) * StvHgt
+	elseif LowestStemUp and LowestStemUp < 999 then
+		y = LowestStemUp - fc
+	else
+		-- if LowestStemDown & LowestStemUp = 1000, LowestNoStem should be set
+		y = 1000
+	end
+	ysmb = (LowestNoStem or 0) - fc ;  if y > ysmb then y = ysmb end
+	return y
+end
+
+local function ps_note_options (X,ybot,ytop,stem,options)
+	-- ensure the option clears the stave lines ...
+	local ystop = Ystave[Isyst][Istave] + OptionClearance*StvHgt
+	if ytop < ystop then ytop = ystop end
+	local ysbot = Ystave[Isyst][Istave] - (OptionClearance+1)*StvHgt
+	if ybot > ysbot then ybot = ysbot end
+	local y
+	local dytop = 0.0   -- to space multiple options above the note
+	local dybot = 0.0   -- to space multiple options beneath the note
+	if not Opt_Cache[options] then
+		Opt_Cache[options] = parse_options(options) -- 2.7m
+	end
+	for i,option in ipairs(Opt_Cache[options]) do -- doesnt clobber the cache
+		local option_is_above = true
+		if OptionMustGoBelow[option] then option_is_above = false end
+		if find(option, ',$') then -- 3.1d,e,n
+			option = gsub(option, ',$', '')
+			option_is_above = false
+		end
+		local x = X
+		if option_is_above and stem == 'up' then  -- 2.8z
+			x = x + BlobQuarterWidth*StvHgt
+		elseif not option_is_above and stem == 'down' then
+			x = x - BlobQuarterWidth*StvHgt
+		end
+		local text = '';  local shortoption = ''
+		if option ==  'blank' or option ==  '' then
+			shortoption = 'blank'
+		elseif find(option,"^[Ibir]s?.+$") then  -- text option
+			shortoption,text = match(option,"^([Ibir]s?)(.+)$") 
+		elseif find(option,"^s.+$") then
+			shortoption = 'rs' ; text = match(option,"^s(.+)$")
+		elseif find(option,"^gs.+$") then
+			shortoption = 'gs' ; text = match(option,"^gs(.+)$")
+		elseif find(option,"^dim") then
+			shortoption = 'dim'
+		elseif find(option,"^cre") then
+			shortoption = 'cre'
+		else
+			shortoption = gsub(option,"[,']", "")
+			shortoption = Options[shortoption] or shortoption
+		end
+		local optiondy = StvHgt
+		if OptionDy[shortoption] then
+			optiondy = optiondy * OptionDy[shortoption]
+		else
+			optiondy = optiondy * OptionDyDflt
+		end
+		if find(text, "^[aceimnorsuvwxz]+$") then
+			optiondy = optiondy * 0.85
+		end
+		if option_is_above then
+			option = gsub(option, "'$", "")
+			y = ytop + dytop + 0.5*optiondy
+			dytop = dytop + optiondy
+		else
+			y = ybot - dybot - 0.5*optiondy
+			dybot = dybot + optiondy
+		end
+		if shortoption == 'fermata' then
+			if option_is_above then
+				printf("%g %g %g fermata",  x, y, StvHgt)
+			else
+				printf("%g %g %g fermata",  x, y, 0.0-StvHgt)
+			end
+		elseif shortoption == 'gs' then
+			printf("%s %g %g %g guitar_string", text,x,y,StvHgt)
+		elseif Options[option] then
+			printf("%g %g %g %s", x,y,StvHgt,Options[option])
+		elseif option == 'blank' or option == '' then
+		elseif text and string.len(text)>0.5 then  -- text option
+			local font ;  local fontsize = TextSize*StvHgt
+			if     find(shortoption,"^I") then font = BoldItalicFont
+			elseif find(shortoption,"^i") then font = ItalicFont
+			elseif find(shortoption,"^b") then font = BoldFont
+			else font = RegularFont
+			end
+			if find(shortoption,"s") then
+				fontsize = fontsize * SmallFontRatio
+			end
+			if find(text,"[(){}][',]*%d$") then -- 3.0d
+				warn("\nline "..tostring(LineNum)..": dubious text-option "
+				..text.." (slurs and ties must precede options!)")
+			end
+			s1 = match(text,'^"(.*)"$') ; if s1 then text = s1 end
+			printf("%g %g /%s %g (%s) centreshow",
+			 x, y, font, fontsize, escape_and_utf2iso(text))
+		elseif find(option,'^cre') or find(option,'^dim') then
+		elseif find(option,'^Pe?d?$') then   -- 3.0b
+			-- should be a more consistent distance beneath the stave
+			local fontsize = TextSize*StvHgt
+			printf("%g %g /%s %g (%s) centreshow",x,y,PedalFont,fontsize,"Ped")
+		elseif option == '*' then   -- 3.1d,n
+			-- as text, * is too off-centre; it needs a PS routine.
+			local fontsize = 2.0*TextSize*StvHgt
+			printf("%g %g /%s %g (%s) centreshow",
+				x-0.2*fontsize, y-0.37*fontsize, PedalFont, fontsize, '*')
+		elseif OptionMustGoBelow[option] then   -- 3.1n
+			if     option == 'Una' then option = 'Una Corda'  -- 3.1p
+			elseif option == 'Tre' then option = 'Tre Corde';
+			end
+			local fontsize = TextSize*StvHgt
+			printf("%g %g /%s %g (%s) centreshow",x,y,PedalFont,fontsize,option)
+		else
+			warn_ln("unrecognised option "..option)
+		end
+	end
+end
+
+local function ps_blank (currentpulse, symbol, x)
+	local options;
+	symbol,options = table.unpack(split(symbol,'-',2)) -- blank-fermata etc
+	if options then
+		ps_note_options(x,ps_y_below_note(),ps_y_above_note(),'none',options)
+	end
+end
+
+local function ps_rest (currentpulse, symbol, X)
+	-- currentpulse is (dsq|smq|qua|cro|min|smb|bre)3?\.?\.?
+	-- symbol is rest|rest,|rest,,|rest,,,|rest'|rest''|rest'''
+	local options
+	symbol,options = table.unpack(split(symbol,'-',2)) -- rest-fermata etc
+	local dy = -0.5  -- default middle stave-line
+	local s1 = match(symbol, "^rest([,']*)")
+	local n = 0.5 * string.len(s1)  -- 3.0a
+	if     find(s1, ",") then dy = dy - n
+	elseif find(s1, "'") then dy = dy + n
+	end
+	local Y = Ystv + dy*StvHgt;
+	local smallstvhgt = StvHgt   -- 3.1o
+	if find(currentpulse,"-s$") then
+		smallstvhgt = smallstvhgt * SmallStemRatio
+	end
+	if find(currentpulse, "^smb") then
+		Y = Y + 0.25*StvHgt ;  dy = dy + 0.25  -- 4th stave-line
+		printf("%g %g %g smbrest", X,Y,StvHgt)
+		if dy > 0.2 or dy < -1.2 then  -- 2.7t
+			printf("%g %g %g ledger", X,Y,StvHgt)
+		end
+	elseif find(currentpulse, "^min") then
+		printf("%g %g %g minimrest", X,Y,StvHgt)
+		if dy > 0.2 or dy < -1.2 then  -- 2.7t
+			printf("%g %g %g ledger", X,Y,StvHgt)
+		end
+	elseif find(currentpulse, "^cro") then
+		printf("%g %g %g crochetrest", X,Y,smallstvhgt)
+	elseif find(currentpulse, "^qua") then
+		printf("%g %g %g quaverrest", X,Y,smallstvhgt)
+	elseif find(currentpulse, "^bre") then
+		printf("%g %g %g breverest", X,Y,StvHgt)
+	elseif find(currentpulse, "^dsq") then
+		printf("%g %g %g demisemiquaverrest",X,Y,smallstvhgt)
+	elseif find(currentpulse, "^hds") then
+		printf("%g %g %g hemidemisemiquaverrest",X,Y,smallstvhgt)
+	else
+		printf("%g %g %g semiquaverrest", X,Y,smallstvhgt)
+	end
+	if find(currentpulse, "%.%.$") then  -- print the dot, if any
+		local x_plus  = X + DotRightOfNote * StvHgt
+		-- should only raise dot if note on line ...
+		local y_minus = Y + DotAboveNote * StvHgt 
+		printf("%g %g %g doubledot", x_plus,y_minus,StvHgt)
+	elseif find(currentpulse, "%.$") then
+		local x_plus  = X + DotRightOfNote * StvHgt;
+		-- should only raise dot if note on line ...
+		local y_minus = Y + DotAboveNote * StvHgt 
+		printf("%g %g %g dot", x_plus,y_minus,StvHgt)
+	end
+	if options and option~='' then
+		ps_note_options(X,ps_y_below_note(),ps_y_above_note(),'none',options)
+	end
+end
+
+local function ps_ledger_lines (x, dy)
+	-- draws ledger lines if $dy > 0.2 above top of stave, or <-1.2 below top
+	if not x then  print("% BUG: ps_ledger_lines: x undefined"); return end
+	if not dy then print("% BUG: ps_ledger_lines dy undefined"); return end
+	local yl  -- the height of the ledger line, rather than the note
+	local y   -- the absolute height of the ledger line on the page
+	if dy > 0.2 then  -- ledger line(s) above stave
+		yl = 0.25
+		while true do
+			y = Ystv + StvHgt * yl
+			printf("%g %g %g ledger", x, y, StvHgt)
+			yl = yl + 0.25
+			if yl > (dy+0.1) then break end
+		end
+	elseif dy < -1.2 then -- ledger line(s) below stave
+		yl = -1.25
+		while true do
+			y = Ystv + StvHgt * yl;
+			printf("%g %g %g ledger", x, y, StvHgt)
+			yl = yl - 0.25
+			if yl < (dy-0.1) then break end
+		end
+	end
+end
+
+local function ps_tails_or_beams (text)
+	if not text then
+		warn_ln('ps_tails_or_beams: BUG: text=nil CrosSoFar=',CrosSoFar)
+		print(_G.debug.traceback())
+		return 0
+	end
+	if find(text,'^qua') then return 1; end
+	if find(text,'^smq') then return 2; end
+	if find(text,'^dsq') then return 3; end
+	if find(text,'^hds') then return 4; end
+	if find(text,'^min[^/]*///') then return 3; end -- ZZZ
+	if find(text,'^min[^/]*//')  then return 2; end -- ZZZ
+	if find(text,'^min[^/]*/')   then return 1; end -- ZZZ
+	return 0
+end
+
+local function ps_note (noteref, X, height2cross)
+	-- $X,$Y need local in Perl, thus should be global or an upvalue in Lua
+	-- all the stem, tail, beam and rightshift stuff is in sub ps_event
+	-- Inconsistency here of WhiteBlobHalfWidth with sub ps_beam ...
+	local Y      = ps_ypitch(noteref['pitch'])  -- $Y needs local
+	local stemup = is_stemup(noteref)
+	local accidental = noteref['accidental']  -- also used in line 3050
+	if not accidental then accidental = '' end
+	local acc_shift = noteref['accidentalshift']
+	local accidental_before_note = AccidentalBeforeNote*StvHgt -- 2.9o
+	-- 20130124 do I need to calculate accidental_before_note if no accidental?
+	if (stemup or ps_is_stemless()) and noteref['cross'] then -- 2.8p
+		accidental_before_note = accidental_before_note +
+		  0.37*StvHgt*AccidentalShift
+	elseif acc_shift and not stemup and not noteref['cross'] then
+		local height = round(8*Ytable[noteref['pitch']])  -- 3.1j
+		if height2cross[height-1] or height2cross[height+1] then
+			accidental_before_note = accidental_before_note +
+			  0.42*StvHgt*AccidentalShift
+			-- 20130124 why .42 here but .37 in the stemup case ?!
+			-- Naturals are good at .42; flats need more space for $height+1
+			-- and a bit less for $height-1 . How fussy do I want to get ?
+			-- That calculation applies to both stemup and stemdown...
+		end
+	end
+	if acc_shift then
+		accidental_before_note = accidental_before_note +
+			acc_shift*StvHgt*AccidentalShift
+	end
+	local acc_size = StvHgt
+	if find(CurrentPulseText,'-s$') then
+		accidental_before_note = accidental_before_note * SmallNoteRatio
+		acc_size = acc_size * SmallNoteRatio
+	end
+	local xacc = X - accidental_before_note   -- 2.9o
+	-- print the accidental, if any
+	if accidental == '#' then
+		printf("%g %g %g sharp", xacc, Y, acc_size)
+	elseif accidental == 'b' then
+		printf("%g %g %g flat",  xacc, Y, acc_size)
+	elseif accidental == 'n' then
+		printf("%g %g %g natural",  xacc, Y, acc_size)
+	elseif accidental == '##' then
+		printf("%g %g %g doublesharp", xacc, Y, acc_size)
+	elseif accidental == 'bb' then
+		printf("%g %g %g flat",  xacc, Y, acc_size*0.9)
+		printf("%g %g %g flat", xacc-DoubleFlatSpacing*StvHgt,Y,acc_size*0.9)
+	elseif accidental ~= '' then
+		die("BUG! pitch = ",pitch," wierd accidental ",accidental)
+	end
+	-- print the blob, white or black
+	if find(CurrentPulseText,'^bre') then -- 2.9a bre can now be small
+		printf ("%g %g %g breve", X, Y, acc_size)
+	elseif find(CurrentPulseText,'^min') or
+	  find(CurrentPulseText,'^smb') then
+		printf ("%g %g %g whiteblob", X, Y, acc_size)
+	else
+		printf ("%g %g %g blackblob", X, Y, acc_size)
+	end
+	-- print the ledger lines, if any
+	ps_ledger_lines(X, dypitch(noteref['pitch']))
+	do -- print the dot, if any
+		local sh = StvHgt
+		if find(CurrentPulseText,'-s$') then
+			sh = sh * SmallNoteRatio
+		end
+		-- should really only raise dot if note is on a line ...
+		if find(CurrentPulseText,'%.%.') then
+			local x_plus  = X + DotRightOfNote*sh; 
+			local y_minus = Y + DotAboveNote*sh; 
+			printf("%g %g %g doubledot", x_plus,y_minus,sh)
+		elseif find(CurrentPulseText,'%.') then
+			local x_plus  = X + DotRightOfNote*sh
+			local y_minus = Y + DotAboveNote*sh
+			printf("%g %g %g dot", x_plus, y_minus, sh)
+		end
+	end
+	-- end the slur or tie, if any; here in PostScript they're the same.
+	-- XXX but if up {'1 then the x-adjustments could be dispensed with.
+	-- XXX we could have endslur AND endtie, or startslur AND starttie
+	local function end_thing (th_type, th_num, th_shift)
+		local x_left, y_left
+		local key = concat({th_type,Isyst,Istave,th_num},' ')
+		x_left = Xstart[key]
+		if not x_left then -- detect the nearest :|| before using BOL ...
+			local ib = Ibar
+			while true do
+				ib = ib - 1
+				if bit32.band(BarType[Isyst][ib],2) > 0.5 then
+					x_left = Xbar[Isyst][ib] ; break
+				end
+				if ib < 1 then
+					x_left = Lmargin[Isyst] + SpaceForClef*StvHgt ; break
+				end
+			end
+		end
+		-- XXX if stemup & shiftup, 1st step is a notestem, else .5 StvHgt
+		-- BUT if up&up 1st step should be to just above the top-of-stem (beams)
+		local updown = 1.0
+		if (th_num % 2) > 0.5 then  -- end tie above (odd numbers)
+			local above_note = TieAboveNote + th_shift*TieDy
+			if stemup and th_shift>0.1 then above_note = above_note+TieShift end
+			y_right = Y + above_note*StvHgt
+			x_right = X
+			y_left=Ystart[key] or y_right
+			if accidental == 'b' and math.abs(th_shift)<Epsilon then
+			  y_right = y_right + 0.7*TieAboveNote*StvHgt
+			end
+		else	-- end tie below
+			updown = -1.0
+			local above_note = th_shift*TieDy - TieAboveNote
+			if not stemup and th_shift<0 then above_note=above_note-TieShift end
+			y_right = Y + above_note*StvHgt
+			y_left=Ystart[key] or y_right
+			if stemup or math.abs(th_shift)>Epsilon then x_right = X
+			else x_right = X - 1.6 * BlackBlobHalfWidth * StvHgt
+			end
+		end
+		if (x_right-x_left) < MustReallySquashTie*StvHgt then
+			x_left  = x_left  - 0.75*BlackBlobHalfWidth*StvHgt  -- 2.4f
+			x_right = x_right + 0.75*BlackBlobHalfWidth*StvHgt  -- 2.4f
+		elseif (x_right-x_left) < MustSquashTie*StvHgt then
+			x_left  = x_left  - 0.50*BlackBlobHalfWidth*StvHgt
+			x_right = x_right + 0.50*BlackBlobHalfWidth*StvHgt
+		end
+		-- impose max tie gradient ...
+		local max_delta_y = MaxTieGradient * (x_right-x_left)
+		local actual_delta_y = math.abs(y_right-y_left)
+		if actual_delta_y > max_delta_y then
+			if y_right > y_left then  -- positive gradient
+				if th_num%2 > 0.5 then
+					 y_left  = y_left  +  actual_delta_y - max_delta_y
+				else y_right = y_right - (actual_delta_y - max_delta_y)
+				end
+			else	-- negative gradient
+				if th_num%2 > 0.5 then
+					 y_right = y_right + actual_delta_y - max_delta_y
+				else y_left  = y_left - (actual_delta_y - max_delta_y)
+				end
+			end
+		end
+		printf("%g %g %g %g %g %g slur",
+			x_left, y_left, x_right, y_right, updown, StvHgt)
+		Xstart[key] = nil
+		Ystart[key] = nil
+	end
+	if noteref['endtie'] then
+		end_thing('tie', noteref['endtie'], noteref['endtieshift'] or 0)
+	end
+	if noteref['endslur'] then
+		end_thing('slur',noteref['endslur'], noteref['endslurshift'] or 0)
+	end
+	-- start a tie or slur, if any
+	local function start_thing (th_type, th_num, th_shift)
+		local key = concat({th_type,Isyst,Istave,th_num},' ')
+		if (th_num % 2) > 0.5 then  -- start tie above (odd numbers)
+			local above_note = th_shift*TieDy + TieAboveNote
+			if stemup and th_shift>0 then above_note=above_note+TieShift end
+			y_right = Y + above_note*StvHgt
+			Ystart[key] = Y + above_note*StvHgt
+			if th_shift>0 then
+				Xstart[key] = X + 0.5*BlackBlobHalfWidth*StvHgt
+			elseif stemup then
+				Xstart[key] = X + 1.6*BlackBlobHalfWidth*StvHgt -- too far?
+				if #BeamUp==0 and (find(CurrentPulseText,'^smq')
+				  or find(CurrentPulseText,'^qua')
+				  or find(CurrentPulseText,'^dsq')
+				  or find(CurrentPulseText,'^hds')) then
+					Xstart[key] = Xstart[key] + BlackBlobHalfWidth*StvHgt
+				end
+			else
+				Xstart[key] = X
+			end
+		else	-- start tie below (even numbers)
+			local above_note = th_shift*TieDy - TieAboveNote
+			if not stemup and th_shift<0 then
+				above_note = above_note - TieShift
+			end
+			Ystart[key] = Y + above_note*StvHgt
+			Xstart[key] = X
+		end
+	end
+	if (noteref['starttie']) then
+		start_thing('tie', noteref['starttie'], noteref['starttieshift'] or 0)
+	end
+	if (noteref['startslur']) then
+		start_thing('slur',noteref['startslur'],noteref['startslurshift'] or 0)
+	end
+	local options = noteref['options']
+	if options and (ps_tails_or_beams(CurrentPulseText) == 0
+	  or (#BeamUp == 0 and not StartBeamUp
+	  and #BeamDown==0 and not StartBeamDown)) then
+		local stem = 'none'
+		if not ps_is_stemless() then
+			if stemup then stem = 'up' else stem = 'down' end
+		end
+		ps_note_options(X,ps_y_below_note(),ps_y_above_note(),stem,options)
+	end
+end
+
+local function ps_best_fit_gradient (x_ref, y_ref)
+	local sigma_x=0  ; local sigma_y=0
+	local sigma_xy=0 ; local sigma_xsquared=0
+	for i,x in ipairs(x_ref) do
+		local y = y_ref[i]
+		sigma_x  = sigma_x  + x ;   sigma_y  = sigma_y + y
+		sigma_xy = sigma_xy + x*y ; sigma_xsquared = sigma_xsquared + x*x
+	end
+	local n = #x_ref
+	local denominator = n*sigma_xsquared - sigma_x*sigma_x
+	if math.abs(denominator) < Epsilon then denominator = Epsilon end
+	return (n*sigma_xy - sigma_x*sigma_y) / denominator
+end
+
+local function ps_beam (beamupordown) -- usage: &ps_beam(@BeamUp)
+	-- Draws a beam across, and stems up or down from, a list of events.
+	-- Each event is expressed by seven TAB-separated items in a string:
+	-- xstem, ylowblob, yhighblob, qua smq or dsq, up or down,
+	-- accidental on top (if up) or bottom (if down) note, $options eg tr-ff-.
+	-- pre-multiply some frequently-used stuff
+	local accidental_before_note =
+	  (AccidentalBeforeNote + WhiteBlobHalfWidth) * StvHgt -- small?
+	local min_beam_clearance = MinBeamClearance   * StvHgt
+	local sharp_half_height  = SharpHalfHeight    * StvHgt
+	local flat_half_height   = FlatHalfHeight     * StvHgt
+	local Direction, x,ylowblob,yhighblob,duration,direction,accidental
+	local durations={}; local xes={};  local ylowblobs={}; local yhighblobs={}
+	local accidentals={}; local optionses={}
+	if #beamupordown == 0 then return false end
+	local n = #beamupordown ; if n<2 then
+		warn(' ps_beam: only ',n,' stems at bar ',Ibar,' stave ',istave)
+		return false
+	end
+	local smallness = SmallStemRatio
+	for i,str in ipairs(beamupordown) do
+		x,ylowblob,yhighblob,duration,direction,accidental,options =
+		  table.unpack(split(str,"\t"))
+		duration = gsub(duration, '%.+$', '') -- ignore dots for beam
+		if ps_tails_or_beams(duration) == 0 then  -- ZZZ
+			warn(' ps_beam: ',str,': unknown duration ',duration)
+			return false
+		end
+		if not find(duration,'-s$') then
+			smallness = 1.0 -- only small if ALL notes under beam are small
+		end
+		if not find(direction,'^up') and not find(direction,'^down') then
+			warn(' ps_beam: ',str,': unknown direction ',direction)
+			return false
+		end
+		if Direction then
+			if direction ~= Direction then
+				die(" ps_beam can't mix ",Direction," and ",direction)
+			end
+		else
+			Direction = direction
+		end
+		table.insert(xes, x)
+		table.insert(ylowblobs,   ylowblob)
+		table.insert(yhighblobs,  yhighblob)
+		table.insert(durations,   duration)
+		table.insert(accidentals, accidental)
+		table.insert(optionses,   options)
+	end
+	local smallstaveheight = StvHgt * smallness;   -- for speed
+	local stem_length   = StemLength*smallstaveheight;
+	local max_beam_stub = MaxBeamStub*smallstaveheight;
+	local x1,xn, ylowblob1,ylowblobn, yhighblob1,yhighblobn, y1,yn
+	x1         = xes[1];         xn         = xes[n]
+	ylowblob1  = ylowblobs[1] ;  ylowblobn  = ylowblobs[n]
+	yhighblob1 = yhighblobs[1] ; yhighblobn = yhighblobs[n]
+	if find(Direction,'^up') then
+		y1 = yhighblob1 + stem_length
+		yn = yhighblobn + stem_length
+		-- check the beams don't sink into ledger lines ... 2.7v,2.7x,2.8x,2.9u
+		local gap   = BeamSpacing * smallstaveheight
+		local ymin1 = Ystave[Isyst][Istave] - StvHgt
+		local yminn = ymin1
+		ymin1 = ymin1 + gap * (ps_tails_or_beams(durations[1]) - 1) -- 2.9u
+		if y1 < ymin1 then y1 = ymin1 end
+		yminn = yminn + gap * (ps_tails_or_beams(durations[n]) - 1)  -- 2.9u
+		if yn < yminn then yn = yminn end
+		-- XXX if both ends needed adjusting, should impose a residual
+		-- gradient of half the original $yhighblobn-$yhighblob1
+		-- impose max beam gradient ...
+		local ymin   -- BUG if $xn == $x1
+		if yn > y1 then  -- positive gradient
+			ymin = yn - MaxBeamGradient * (xn-x1)
+			if y1 < ymin then y1 = ymin end
+		else	-- negative gradient
+			ymin = y1 - MaxBeamGradient * (xn-x1)
+			if yn < ymin then yn = ymin end
+		end
+		-- check if any intermediate notes are too high ...
+		local x, y, dx, dy, dydx, too_high
+		dy = yn - y1
+		dx = xn - x1 ;  if dx<1.0 then dx=1.0 end
+		dydx = dy / dx
+		too_high = false
+		for i = 2,n-1 do
+			x    = xes[i] ; y = y1 + dydx * (x-x1)
+			ymin = yhighblobs[i] + min_beam_clearance +
+			  BeamGapMult * gap * (ps_tails_or_beams(durations[i])-1)
+			if y < ymin then too_high = true; break end
+			if accidentals[i] ~= '-' then
+				x = xes[i] - accidental_before_note
+				y = y1 + dydx * (x-x1)
+				ymin = yhighblobs[i]+min_beam_clearance+sharp_half_height
+				if y < ymin then too_high = true; break end
+			end
+		end
+		if too_high and n>2 then
+			local best_fit_gradient = ps_best_fit_gradient(xes,yhighblobs)
+			if math.abs(best_fit_gradient) < MaxBeamGradient then
+				if best_fit_gradient > 0.0 then  -- positive gradient
+					ymin = yn - best_fit_gradient * (xn-x1)
+					if y1 < ymin then y1 = ymin end
+				else  -- negative gradient
+					ymin = y1 + best_fit_gradient * (xn-x1)
+					if yn < ymin then yn = ymin end
+				end
+			end
+		end
+		-- raise beam if any notes are too high ... 2.9v
+		dy = yn - y1 ;  dydx = dy / dx
+		for i = 1,n do
+			x = xes[i]; y = y1 + dydx * (x-x1)
+			ymin = yhighblobs[i] + min_beam_clearance +
+			  BeamGapMult * gap * (ps_tails_or_beams(durations[i]) - 1)
+			if y < ymin then y1 = y1 + ymin - y ; yn = yn + ymin - y end
+			if accidentals[i] ~= '-' then
+				x = xes[i] - accidental_before_note
+				y = y1 + dydx * (x-x1)
+				-- 2.9z should detect if accidental is flat or sharp...
+				ymin = yhighblobs[i] + min_beam_clearance + flat_half_height
+				if y < ymin then y1 = y1 + ymin - y ;  yn = yn + ymin - y end
+			end
+		end
+		-- print the first (qua) beam anyway ...
+		printf("%g %g %g %g %g beam", x1, y1, xn, yn, smallstaveheight)
+		-- then print the smq,dsq,hds beams (up) where they are needed ...
+		for ibeam = 2,4 do  -- 2.9v
+			local ibeamm1 = ibeam - 1
+			local gaps = gap * ibeamm1
+			for i = 1,n do
+				if ps_tails_or_beams(durations[i]) > ibeamm1 then
+					if i==1 and ps_tails_or_beams(durations[i+1])<ibeam then
+						local stublength = (xes[i+1] - xes[i]) * 0.5
+						if stublength > max_beam_stub then
+							stublength = max_beam_stub
+						end
+						printf("%g %g %g %g %g beam",
+						  xes[i], y1-gaps, xes[i]+stublength,
+						  y1 -gaps + dydx*(xes[i]+stublength-x1),
+						  smallstaveheight)
+					elseif i > 1 and
+					  ps_tails_or_beams(durations[i-1]) > ibeamm1 then
+						printf("%g %g %g %g %g beam",
+						  xes[i-1], y1 - gaps + dydx*(xes[i-1]-x1),
+						  xes[i],   y1 - gaps + dydx*(xes[i]-x1),
+						  smallstaveheight)
+					elseif i==n or
+					  (i<n and ps_tails_or_beams(durations[i+1])<ibeam) then
+						local stublength = (xes[i]-xes[i-1]) * 0.5
+						if stublength > max_beam_stub then
+							stublength = max_beam_stub
+						end
+						printf("%g %g %g %g %g beam",
+						  xes[i] - stublength,
+						  y1 - gaps + dydx*(xes[i]- stublength-x1),
+						  xes[i], y1-gaps+dydx*(xes[i]-x1),
+						  smallstaveheight)
+					end
+				end
+			end
+		end
+		-- print stems ...
+		printf("%g %g %g %g notestem", x1, y1, ylowblob1, StvHgt)
+		ps_note_options(x1 - BlackBlobHalfWidth*StvHgt,
+			ylowblob1 - (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			y1 + (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			'up', optionses[1]);   -- 2.9d
+		-- intermediate stems ...
+		for i = 2,n-1 do
+			x = xes[i]; y = y1 + dy*(x-x1) / dx
+			printf("%g %g %g %g notestem", x, y, ylowblobs[i], StvHgt)
+			ps_note_options(x - BlackBlobHalfWidth*StvHgt,
+			  ylowblobs[i] - (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			  y + (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			 'up', optionses[i])   -- 2.9d
+		end
+		printf("%g %g %g %g notestem", xn, yn, ylowblobn, StvHgt)
+		ps_note_options(xn - BlackBlobHalfWidth*StvHgt,
+		  ylowblobn - (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			yn + (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			'up', optionses[n])   -- 2.9d
+		BeamUp = {} ;  StartBeamUp = false
+	else	-- Direction is down ...
+		local gap = BeamSpacing * smallstaveheight
+		y1 = ylowblob1 - stem_length
+		yn = ylowblobn - stem_length
+		-- check beams don't rise into ledger lines ... 2.7v,2.7x,2.8x,2.9u
+		local ymax1 = Ystave[Isyst][Istave]
+		local ymaxn = ymax1
+		ymax1 = ymax1 - gap * (ps_tails_or_beams(durations[1]) - 1)  -- 2.9u
+		if y1 > ymax1 then y1 = ymax1 end
+		ymaxn = ymaxn - gap * (ps_tails_or_beams(durations[n]) - 1)  -- 2.9u
+		if yn > ymaxn then yn = ymaxn end
+		-- XXX if both ends needed adjusting, should impose a residual
+		-- gradient of half the original $ylowblobn-$ylowblob1
+		-- impose max beam gradient ...
+		local ymax
+		if yn > y1 then -- positive gradient
+			ymax = y1 + MaxBeamGradient * (xn-x1)
+			if yn > ymax then yn = ymax end
+		else  -- negative gradient
+			ymax = yn + MaxBeamGradient * (xn-x1)
+			if y1 > ymax then y1 = ymax end
+		end
+		-- check if any intermediate notes are too low ...
+		local x, y, dx, dy, dydx, too_low
+		dy = yn - y1
+		dx = xn - x1 ;  if dx<1.0 then dx=1.0 end
+		dydx = dy / dx
+		too_low = false
+		for i = 2,n-1 do
+			x = xes[i]; y = y1 + dydx * (x-x1)
+			ymax = ylowblobs[i] - min_beam_clearance -
+			  BeamGapMult * gap * (ps_tails_or_beams(durations[i]) - 1)
+			if y > ymax then too_low = true ; break end
+			if accidentals[i] ~= '-' then
+				x = xes[i] - accidental_before_note
+				y = y1 + dydx * (x-x1)
+				ymax = ylowblobs[i] - min_beam_clearance + sharp_half_height
+				if y > ymax then too_low = true ; break end
+			end
+		end
+		if too_low and n>2 then
+			local best_fit_gradient = ps_best_fit_gradient(xes,ylowblobs)
+			if math.abs(best_fit_gradient) < MaxBeamGradient then
+				if best_fit_gradient > 0.0 then -- positive gradient
+					ymax = y1 + best_fit_gradient*dx
+					if yn > ymax then yn = ymax end
+				else  -- negative gradient
+					ymax = yn - best_fit_gradient*dx
+					if y1 > ymax then y1 = ymax end
+				end
+			end
+		end
+		-- lower beam if any notes are too low ...  2.9v
+		dy = yn - y1 ; dydx = dy / dx
+		for i = 1,n do
+			x = xes[i] ; y = y1 + dydx*(x-x1)
+			ymax = ylowblobs[i] - min_beam_clearance -
+			 BeamGapMult * gap * (ps_tails_or_beams(durations[i]) - 1)
+			if y > ymax then y1 = y1 - (y-ymax) ; yn = yn - (y-ymax) end
+			if accidentals[i] ~= '-' then
+				x = xes[i] - accidental_before_note
+				y = y1 + dydx * (x-x1)
+				ymax = ylowblobs[i] - min_beam_clearance + sharp_half_height
+				if y > ymax then y1 = y1 - (y-ymax) ; yn = yn - (y-ymax) end
+			end
+		end
+		-- print the first (qua) beam anyway ...
+		printf("%g %g %g %g %g beam", x1, y1, xn, yn, smallstaveheight)
+		-- local gap = $BeamSpacing*$smallstaveheight;   -- 2.7u
+		-- then print the smq,dsq,hds beams (down) where they are needed ...
+		for ibeam = 2,4 do  -- 2.9v
+			local ibeamm1 = ibeam - 1
+			local gaps = gap * ibeamm1
+			for i = 1,n do
+				if ps_tails_or_beams(durations[i]) > ibeamm1 then
+					if i==1 and ps_tails_or_beams(durations[i+1])<ibeam then
+						local stublength = (xes[i+1] - xes[i]) * 0.5
+						if stublength > max_beam_stub then
+							stublength = max_beam_stub
+						end
+						printf("%g %g %g %g %g beam",
+						  xes[i], y1+gaps, xes[i]+stublength,
+						  y1+gaps+dydx*(xes[i]+stublength-x1),
+						  smallstaveheight)
+					elseif i > 1
+					 and ps_tails_or_beams(durations[i-1]) > ibeamm1 then
+						printf("%g %g %g %g %g beam",
+						  xes[i-1], y1+gaps+dydx*(xes[i-1]-x1),
+						  xes[i],   y1+gaps+dydx*(xes[i]-x1),
+						  smallstaveheight)
+					elseif i==n or
+					  (i<n and ps_tails_or_beams(durations[i+1])<ibeam) then
+						local stublength = (xes[i] - xes[i-1]) * 0.5
+						if stublength > max_beam_stub then
+							stublength = max_beam_stub
+						end
+						printf("%g %g %g %g %g beam",
+						  xes[i] - stublength,
+						  y1 + gaps + dydx*(xes[i]-stublength-x1),
+						  xes[i], y1 + gaps + dydx*(xes[i]-x1),
+						  smallstaveheight)
+					end
+				end
+			end
+		end
+		-- print stems ... hmm, this double-prints the options ...
+		printf("%g %g %g %g notestem", x1, y1, yhighblob1, StvHgt)
+		ps_note_options(x1 + BlackBlobHalfWidth*StvHgt,
+		  y1 - (OptionClearance+WhiteBlobHalfHeight) * StvHgt,
+		  yhighblob1 + (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+		  'down', optionses[1]);   -- 2.9d
+		-- intermediate stems ...  also print -xxx options in this loop ...
+		for i = 2,n-1 do
+			x = xes[i]; y = y1 + dy * (x-x1) / dx
+			printf("%g %g %g %g notestem", x, y, yhighblobs[i], StvHgt)
+			ps_note_options(x + BlackBlobHalfWidth*StvHgt,
+			  y - (OptionClearance+WhiteBlobHalfHeight) * StvHgt,
+		 	  yhighblobs[i]+(OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+			  'down', optionses[i])   -- 2.9d
+		end
+		printf("%g %g %g %g notestem", xn, yn, yhighblobn, StvHgt)
+		ps_note_options(xn + BlackBlobHalfWidth*StvHgt,
+		  yn - (OptionClearance+WhiteBlobHalfHeight) * StvHgt,
+		  yhighblobn + (OptionClearance+WhiteBlobHalfHeight)*StvHgt,
+		  'down', optionses[n])   -- 2.9d
+		BeamDown = {} ;  StartBeamDown = false
+	end
+end
+
+local function ps_event (symbols)
+	-- print one thing, or multiple simultaneous things, on one stave ...
+	if MIDI   then die("BUG: ps_event called with MIDI set") end
+	if XmlOpt then warn("BUG: ps_event called with XmlOpt set") ; crash() end
+	-- will be right-adjusted later if there is an r in one of the notes ...
+	local X = ps_beat2x(CrosSoFar,CrosPerPart)
+	local concat = table.concat
+
+	-- measure shortest, highest and lowest stemup and stemdown notes ...
+	HighestStemUp   = 0 ; LowestStemUp   = 1000 -- used by ps_y_above_note
+	HighestStemDown = 0 ; LowestStemDown = 1000 --  and by ps_y_below_note
+	HighestNoStem   = 0 ; LowestNoStem   = 1000
+	local shortest = 99 ; local shortestup = 99 ; local shortestdown = 99
+	local shortestdowntext = '' ; local shortestuptext = ''
+	local stemup_rightshift = 0 ; local stemdown_rightshift = 0
+	local smb_rightshift    = 0
+	local notebit = '' ; local endbeamup = false ; local endbeamdown = false
+	local accidentalup = '' ;  local accidentaldown = '' -- globals in Perl...
+	local startcrossbeam = '' ; local total_chord_options = ''
+	local height2cross = {}  -- 2.8p
+
+	for i,symbol in ipairs(symbols) do
+		local Y
+		if find(symbol, '^blank') then
+			Y = Ystv - 0.5*StvHgt
+			if Y > HighestNoStem then HighestNoStem = Y end
+			if Y < LowestNoStem  then LowestNoStem  = Y end
+			local a = split(symbol, '-', 2);
+			total_chord_options = append_options(total_chord_options,a[2])
+		elseif find(symbol, "^rest[,']*") then
+			local s1 = match(symbol, "^rest([,']*)")
+			local n = 0.5 * string.len(s1)  -- 3.0a
+			if find(s1, ",")     then Y = Ystv - (0.65+n)*StvHgt;
+			elseif find(s1, "'") then Y = Ystv + (n-0.35)*StvHgt
+			else Y = Ystv - 0.5*StvHgt
+			end
+			if Y > HighestNoStem then HighestNoStem = Y end
+			if Y < LowestNoStem  then LowestNoStem  = Y end
+			local a = split(symbol, '-', 2);
+			total_chord_options = append_options(total_chord_options,a[2])
+		elseif is_a_note(symbol) then
+			local noteref = parse_note(symbol)
+			symbols[i] = noteref -- 2.5m change type of the element in @symbols
+			total_chord_options
+			 = append_options(total_chord_options,noteref['options'])
+			Y = ps_ypitch(noteref['pitch'])
+			stemup = is_stemup(noteref)
+			if ps_is_stemless() then
+				if Y > HighestNoStem  then HighestNoStem = Y end
+				if Y < LowestNoStem   then LowestNoStem  = Y end
+				if noteref['rightshift'] then
+					smb_rightshift = noteref['rightshift']
+				end
+			else
+				local startbeam = noteref['startbeam']
+				local endbeam   = noteref['endbeam']
+				if stemup then  -- stem up note ...
+					if Y > HighestStemUp then
+						HighestStemUp = Y
+						accidentalup = noteref['accidental']
+						if not accidentalup or accidentalup=='' then
+							accidentalup = '-'
+						end
+					end
+					if Y < LowestStemUp    then LowestStemUp = Y end
+					if startbeam == '['    then StartBeamUp = true
+					elseif startbeam == '[X' then
+						startcrossbeam = startbeam
+					end
+					if endbeam == ']'      then endbeamup = true
+					elseif endbeam == ']X' then endcrossbeam = endbeam
+					end
+					if noteref['rightshift'] then
+						stemup_rightshift = noteref['rightshift']
+					end
+					if CurrentPulse < shortestup then
+						shortestup     = CurrentPulse
+						shortestuptext = CurrentPulseText
+					end
+				else -- stem down note ...
+					if Y > HighestStemDown then HighestStemDown = Y end
+					if Y < LowestStemDown then
+						LowestStemDown = Y
+						accidentaldown = noteref['accidental']
+						if not accidentaldown or accidentaldown=='' then
+							accidentaldown = '-'
+						end
+					end
+					if startbeam == '['      then StartBeamDown = true
+					elseif startbeam == '[X' then
+						startcrossbeam = startbeam
+					end
+					if endbeam == ']'        then endbeamdown   = true
+					elseif endbeam == ']X'   then endcrossbeam = endbeam
+					end
+					if noteref['rightshift'] then
+						stemdown_rightshift = noteref['rightshift']
+					end
+					if noteref['cross'] then   -- 2.8p, 3.1j
+						local height = round( 8*Ytable[noteref['pitch']] )
+						height2cross[height] = 1
+					end
+					if CurrentPulse < shortestdown then
+						shortestdown     = CurrentPulse
+						shortestdowntext = CurrentPulseText
+					end
+				end
+			end
+		elseif Nbeats[symbol] then  -- it's smb min. min// cro etc
+			CurrentPulse     = Nbeats[symbol]   -- BUG XXX fails smb <C cro G>
+			CurrentPulseText = symbol
+		end -- it could also be other stuff, which we ignore here
+	end
+	-- here ends the measurement loop
+
+	-- now begins the printing loop; print each vertically aligned symbol ...
+	local note_shift             = NoteShift * StvHgt
+	local stem_from_blob_centre  = StemFromBlobCentre * StvHgt
+	for i,symbol in pairs(symbols) do
+		local is_note = type(symbol)=="table"
+		if is_note or find(symbol,'^rest') or
+		  find(symbol,'^blank') then
+			if CurrentPulse < shortest then shortest = CurrentPulse end
+		end
+		if not is_note and Nbeats[symbol] then  -- it's smb min cro etc
+			-- should measure separately shortest stem-up and stem-down!
+			if Nbeats[symbol] < shortest then shortest=Nbeats[symbol] end
+			CurrentPulse = Nbeats[symbol]
+			CurrentPulseText = symbol
+		elseif not is_note and find(symbol,'^blank') then
+			if CurrentPulse < shortest then shortest = CurrentPulse end
+			ps_blank(CurrentPulseText,symbol,X)
+		elseif not is_note and find(symbol,'^rest') then
+			if CurrentPulse < shortest then shortest = CurrentPulse end
+			ps_rest(CurrentPulseText,symbol,X)
+		elseif not is_note and (is_a_clef(symbol) or symbol=='clefspace') then
+		elseif is_note then    -- it's a note !
+			local noteref = symbol  -- why ?
+			local stemup = is_stemup(noteref)
+			local shift = 0
+-- if find(CurrentPulseText,'-s$') then acc=acc*SmallNoteRatio end
+			if noteref['cross'] then
+				local d = stem_from_blob_centre * 2.0
+				if find(CurrentPulseText, '-s$') then
+					 d = d*SmallNoteRatio
+				end
+				if ps_is_stemless() then
+					shift = smb_rightshift * note_shift
+					ps_note(noteref, X+d+shift, height2cross)
+				elseif stemup then
+					shift = stemup_rightshift * note_shift
+					ps_note(noteref, X+d+shift, height2cross)
+				else
+					shift = stemdown_rightshift * note_shift;
+					ps_note(noteref, X-d+shift, height2cross)
+				end
+			else
+				shift = 0
+				if ps_is_stemless() then
+					shift = smb_rightshift * note_shift
+				elseif stemup_rightshift>0 and stemup then
+					shift = stemup_rightshift * note_shift;
+				elseif stemdown_rightshift>0 and not stemup then
+					shift = stemdown_rightshift * note_shift
+				end
+				ps_note(noteref, X+shift, height2cross)
+			end
+		end
+	end
+
+	-- print the notestems, if any ...
+	local ystemend, halfstemlength
+	if ps_is_stemless() then -- just print the tremolandi, if any
+		local halfstemlength = 0.6 * StemLength * StvHgt
+		local smb_x = X + smb_rightshift * note_shift
+--		local stemup = is_stemup(noteref)
+		if find(CurrentPulseText,'/+') then
+			s1 = match(CurrentPulseText,'(/+)')
+--			if stemup then -- XXX but $stemup has not been set ?! :-(
+				printf("%d %g %g %g tremolando", string.len(s1),
+				  smb_x, HighestNoStem+halfstemlength, StvHgt)
+--			else -- stemdown
+--				s1 = match(CurrentPulseText,'(/+)')
+--				printf("%d %g %g %g tremolando", string.len(s1),
+--				  smb_x, LowestNoStem-halfstemlength,  StvHgt)
+--			end
+		end
+	else   -- stems and possibly also tremolandi needed
+		-- print the stem(s), if any ...
+		if HighestStemUp > 0 then   -- if there are some stempup notes ...
+			xstem = X + stem_from_blob_centre
+			xstem = xstem + stemup_rightshift*note_shift
+			local smallness = 1.0
+			if find(shortestuptext,'-s$') then
+				xstem = xstem-BlackBlobHalfWidth*(1.0-SmallNoteRatio)*StvHgt
+				smallness = SmallStemRatio
+			end
+			ystemend = HighestStemUp + StemLength*StvHgt*smallness
+			if ps_tails_or_beams(shortestuptext) > 0.5 then -- tails or beams ?
+				if StartBeamUp then
+					if #BeamUp>0.5 then warn_ln("nested stem-up beams") end
+					BeamUp = { string.format("%g\t%g\t%g\t%s\tup\t%s\t%s",
+					  xstem,LowestStemUp,HighestStemUp, shortestuptext,
+					  accidentalup, total_chord_options), }
+--[[
+				elseif ($startcrossbeam) {
+					if (@crossbeam) {
+						warn " line $LineNum: nested crossbeams\n";
+					end
+					@crossbeam =
+					 string.format("%g\t%g\t%g\t$shortestuptext\tup\t%s\t%s",
+					 $xstem,$LowestStemUp, $HighestStemUp,
+					 $accidentalup, $total_chord_options);
+				elseif (@crossbeam) { -- 3.1m
+					push (@crossbeam,
+					 string.format("%g\t%g\t%g\t$shortestuptext\tup\t%s\t%s",
+					 $xstem,$LowestStemUp,$HighestStemUp,
+					 $accidentalup, $total_chord_options));
+]]
+				elseif #BeamUp>0.5 then -- 3.1m
+					BeamUp[#BeamUp+1] =
+					 string.format("%g\t%g\t%g\t%s\tup\t%s\t%s",
+					 xstem,LowestStemUp,HighestStemUp, shortestuptext,
+					 accidentalup, total_chord_options);
+				else   -- an independent, non-beamed qua smq or dsq
+					if find(CurrentPulseText,'/+') then   -- smallness?
+						s1 = match(CurrentPulseText,'(/+)')
+						printf("%g %g %g %g notestem",
+						 xstem, ystemend, LowestStemUp, StvHgt)
+						printf("%d %g %g %g tremolando\n", string.len(s1),
+						 xstem, 0.5*(ystemend+HighestStemUp), StvHgt)
+					else   -- 2.9v
+						local nbeams = ps_tails_or_beams(shortestuptext)
+						local shiftup = 0.0
+						if nbeams>1 then shiftup = 0.5 + 0.1*(nbeams-2) end
+						local ybeam = ystemend +
+						  shiftup*TailSpacing*StvHgt*(nbeams-1)
+						local dybeam = TailSpacing*StvHgt*smallness
+						for ibeam = 1,nbeams do
+							printf("%g %g %g %g quaverstemup", xstem,
+							  ybeam, LowestStemUp, StvHgt*smallness)
+							ybeam = ybeam - dybeam
+						end
+					end
+				end
+				if endbeamup then ps_beam(BeamUp) end
+			else	-- crochets and minims ...
+				printf("%g %g %g %g notestem",
+				 xstem, ystemend, LowestStemUp, StvHgt)
+				-- print the tremolandi, if any
+				if find(CurrentPulseText,'/+') then   -- ZZZ
+					s1 = match(CurrentPulseText, '(/+)')
+					printf("%d %g %g %g tremolando", string.len(s1),
+					  xstem, 0.5 * (ystemend+HighestStemUp), StvHgt)
+				end
+			end
+			StartBeamUp = false
+		end
+		if HighestStemDown > 0 then  -- also, if there are some stemdown notes
+			xstem = X - stem_from_blob_centre + stemdown_rightshift*note_shift
+			local smallness = 1.0
+			if find(shortestdowntext, '-s$') then
+				xstem = xstem + BlackBlobHalfWidth*(1.0-SmallNoteRatio)*StvHgt
+				smallness = SmallStemRatio
+			end
+			ystemend = LowestStemDown - StemLength*StvHgt*smallness
+			if ps_tails_or_beams(shortestdowntext) > 0.5 then
+				if StartBeamDown then
+					if #BeamDown>0.5 then warn_ln("nested stem-down beams") end
+					BeamDown = {string.format("%g\t%g\t%g\t%s\tdown\t%s\t%s",
+					 xstem,LowestStemDown,HighestStemDown, shortestdowntext,
+					 accidentaldown, total_chord_options), }
+				elseif #BeamDown>0.5 then
+					BeamDown[#BeamDown+1] =
+					 string.format("%g\t%g\t%g\t%s\tdown\t%s\t%s",
+					 xstem,LowestStemDown,HighestStemDown, shortestdowntext,
+					 accidentaldown, total_chord_options)
+				else   -- an independent, non-beamed qua smq or dsq
+					if find(CurrentPulseText,'/+') then   -- smallness?
+						s1 = match(CurrentPulseText,'(/+)')
+						printf("%g %g %g %g notestem",
+				 		  xstem, HighestStemDown, ystemend, StvHgt)
+						printf("%d %g %g %g tremolando\n", string.len(s1),
+						 xstem, 0.5*(ystemend+LowestStemDown), StvHgt)
+					else   -- 2.9v
+						local nbeams = ps_tails_or_beams(shortestdowntext)
+						local shiftdown = 0.0
+						if nbeams>1 then shiftdown = 0.5 + 0.1*(nbeams-2) end
+						local ybeam = ystemend -
+						  shiftdown*TailSpacing*StvHgt*(nbeams-1)
+						local dybeam = TailSpacing*StvHgt*smallness;
+						for ibeam = 1,nbeams do
+							printf("%g %g %g %g quaverstemdown", xstem,
+							  HighestStemDown, ybeam, StvHgt*smallness)
+							ybeam = ybeam + dybeam
+						end
+					end
+				end
+				if endbeamdown then ps_beam(BeamDown) end
+			else	-- crochets and minims ...
+				printf("%g %g %g %g notestem",
+				 xstem, HighestStemDown, ystemend, StvHgt)
+				if find(CurrentPulseText,'/+') then   -- ZZZ
+					s1 = match(CurrentPulseText,'(/+)')
+					printf("%d %g %g %g tremolando", string.len(s1),
+					  xstem, 0.5 * (ystemend+LowestStemDown), StvHgt)
+				end
+			end
+			StartBeamDown = false
+		end
+	end
+
+	-- end of bracketed simultaneous notes, sub ps_event
+	-- accidentalup = '' ;  accidentaldown = ''  -- these should be local!
+	CrosSoFar = CrosSoFar + shortest
+end
+
+local function ps_text (fonttype, fontsize, vertpos, text)
+	if  MIDI  then warn("bug: ps_text called with MIDI set"); return end
+	if XmlOpt then warn("bug: ps_text called with XmlOpt set");  return end
+	local font = RegularFont
+	if     fonttype == 'b' then font = BoldFont
+	elseif fonttype == 'i' then font = ItalicFont
+	elseif fonttype == 'I' then font = BoldItalicFont
+	end
+	local ytext ; local size
+	-- remember ps_text() can be called before the first =1 line ...
+	local staveheight = StvHgt -- can be locally changed
+	if not vertpos or vertpos == '' then vertpos = TextBelowStave end
+	if Istave == 0 then   -- above the top stave in the system
+		staveheight = StaveHeight[Isyst][1]
+		ytext = Ystave[Isyst][1] + vertpos*staveheight
+		size  = TextSize * staveheight
+	elseif Istave < Nstaves[Isyst] then  -- text lies between staves
+		local netgap = GapHeight[Isyst][Istave] - TextSize*staveheight
+		size = 0.5*TextSize * (staveheight+StaveHeight[Isyst][Istave+1])
+		ytext = vertpos*netgap + Ystave[Isyst][Istave+1] + 0.33*size
+	else   -- below the bottom stave in the system
+		-- XXX just TextSize too clumsy: could be lowercase, could be small...
+		ytext = Ystave[Isyst][Istave] - (TextSize+1.0+vertpos)*staveheight
+		size  = TextSize * staveheight
+	end
+	if     fontsize == 's' then size = size * SmallFontRatio
+	elseif fontsize == 'l' then size = size / SmallFontRatio
+	end
+	-- interpret ".48 some text" horizontal spacing
+	local str_by_pos = {} ; local pos = '0.0'
+	while true do
+		local n = find(text, '%s%.%d+%s')
+		if not n then
+			if pos == '0.0' then str_by_pos[pos] = sub(text, 2, -1)
+			else                 str_by_pos[pos] = text
+			end
+			break
+		end
+		if pos == '0.0' then str_by_pos[pos] = sub(text, 2, n-1)
+		else                 str_by_pos[pos] = sub(text, 1, n-1)
+		end
+		pos = match(text, '%s(%.%d+)%s')
+		text=sub(text,n+string.len(match(text,'(%s%.%d+%s)')),-1)
+	end
+	local left = 0; local right -- 20160402 missing barline leaves left=nil
+	for pos,text in pairs(str_by_pos) do  -- order doesn't matter !
+		-- should maybe handle $SpaceRightOfClef,$SpaceForClef,$SpaceForTimeSig,
+		-- $SpaceAfterKeySig, $SpaceForStartRepeat, $SpaceForEndRepeat,
+		-- $SpaceAtEndOfBar ?
+		local pn = tonumber(pos)
+		if pn > Epsilon and Ibar == 1 then
+			left = Xbar[Isyst][0]+(SpaceForClef+WhiteBlobHalfWidth)*staveheight
+		elseif Ibar == 1 then
+			left = Xbar[Isyst][0]+WhiteBlobHalfWidth*staveheight
+		elseif Ibar > 1 then
+			left = Xbar[Isyst][Ibar-1] + WhiteBlobHalfWidth*staveheight
+		end
+		right = Xbar[Isyst][Ibar] - WhiteBlobHalfWidth*staveheight
+		if find(text, "%S") then
+			printf("%g %g /%s %g (%s) leftshow", (1.0-pn)*left + pn*right,
+			  ytext, font, size, escape_and_utf2iso(text))
+		end
+	end
+end
+
+local function bars (nbars, str) -- eg. $str='| 4.5 | 2 3 | 4 ||'
+	nbars = tonumber(nbars)
+	if MIDI then return end
+	-- prints the barlines, and set the following global variables :
+	-- $BarType[Isyst,$Ibar}, $spaceatstart[Ibar}, $Nparts[Isyst,$Ibar},
+	-- $Proportion[Ibar}, $PartShare[Ibar,$ipart}, $Nbars[Isyst}
+	-- and $Ibar
+	-- BarType bits mean: missing,segno,start-repeat,end-repeat,double
+	-- could extract strings for a leftgap from this ...
+	if nbars and not str then
+		str = '|1|'
+		RememberBarsString = str
+		RememberNbars      = nbars
+	elseif not nbars and not str and RememberNbars and RememberBarsString then
+		str   = RememberBarsString
+		nbars = RememberNbars
+	else
+		RememberBarsString = str
+		RememberNbars      = nbars
+	end
+	-- could extract strings for a leftgap from this ...
+	str = gsub(str, '^[^|]*', '')   -- delete up to first barline
+	str = gsub(str, '%s*$', '')
+	local last_terminator = ''; local n
+	BarType[Isyst] = {}
+	Nparts[Isyst]  = {}
+	if find(str, '^|?|?:') then
+	-- if find(str, '^:') then
+		BarType[Isyst][0] = 4; last_terminator='|:'
+		-- str = gsub(str, '^|?|?:%s*', '')
+		str = gsub(str, '^:%s*', '')
+	else
+		BarType[Isyst][0] = 0; last_terminator = '|'
+	end
+	local maxstvhgt = MaxStaveHeight[Isyst] or 19   -- DEBUG only
+	local spaceatstart = {}  -- but the comment above say this is global
+	local sumofproportions   = 0.0  -- sum of  proportions  of all bars in line
+	local sumofspaceatstarts = 0.0  -- sum of spaceatstarts of all bars in line
+	local bars = split(str, '%s*:?||?:?%s*')  -- 2.7g
+	if bars[1]     == '' then table.remove(bars,1) end
+	if bars[#bars] == '' then table.remove(bars,#bars) end
+	local terminators = {} ; for w in gmatch(str, ':?||?:?') do
+		-- here we have omitted the mandatory space before and after :-(
+		table.insert(terminators, w)
+	end
+	if #bars > nbars then
+		nbars = #bars
+	else
+		while true do
+			if #bars >= nbars then break end
+			table.insert(bars, bars[#bars])
+			table.insert(terminators, terminators[#terminators])
+		end
+	end
+	-- in Perl (see perldoc -f split) if the PATTERN contains capturing
+	-- groups, then for each separator, an additional field is produced
+	-- for each substring captured.   But this doesn't work with my split() !
+	-- if (#bars%2)>0.5 and bars[#bars] == '' then table.remove(bars) end
+	local ibar = 0   -- we use it in this function for a local loop...
+	while ibar < #bars do
+		ibar = ibar + 1
+		local tokens = split( bars[ibar],'%s+');
+		local terminator = terminators[ibar+1]
+		BarType[Isyst][ibar] = 0
+		spaceatstart[ibar] = SpaceAtBeginningOfBar*maxstvhgt -- 2.4c
+		if not terminator then BarType[Isyst][ibar]=16; terminator='' end
+		if find(terminator,'||') then
+			BarType[Isyst][ibar] = BarType[Isyst][ibar] + 1 end
+		if find(terminator,'^:') then
+			BarType[Isyst][ibar] = bit32.bor(BarType[Isyst][ibar], 3)
+		end
+		if find(terminator,':$') then
+			BarType[Isyst][ibar] = bit32.bor(BarType[Isyst][ibar], 5)
+		end
+		if find(last_terminator, ':$') then
+			spaceatstart[ibar] = spaceatstart[ibar] +
+			  SpaceForStartRepeat*maxstvhgt
+		end
+		last_terminator = terminator   -- ready for next bar
+		if find(tokens[1], 'Segno') then	-- skip segno ?
+			BarType[Isyst][ibar-1] = BarType[Isyst][ibar-1] + 8
+			table.remove(tokens, 1)
+		end
+		local ipart = 1;   local itoken = 1
+		if XmlOpt then goto nextbar end
+		s1 = match(tokens[1], '(%d+)[b#n]') ; if s1 then -- keysig
+			spaceatstart[ibar] = spaceatstart[ibar] + maxstvhgt *
+				(tonumber(s1)*AccidentalDxInKeysig + SpaceAfterKeySig)
+			table.remove(tokens, 1)
+		end
+		if find(tokens[1], '%d+/%d+') then	-- timesig
+			local topnum, botnum = table.unpack(split(tokens[1],'/',2))
+			if tonumber(topnum)>9 or tonumber(botnum)>9 then  -- 2.0z
+				spaceatstart[ibar] = spaceatstart[ibar] +
+				  SpaceForFatTimeSig * maxstvhgt;
+			else
+				spaceatstart[ibar] = spaceatstart[ibar] +
+				  SpaceForTimeSig * maxstvhgt
+			end
+			table.remove(tokens, 1)
+		end
+		-- this will be wrong if one of the tokens is a non-numeric syntax err
+		Nparts[Isyst][ibar] = #tokens -- relative spacing
+		-- tot up the given proportions of the bars ...
+		Proportion[ibar] = 0.0
+		PartShare[ibar]  = {}
+		local itoken = 1 ; local ipart = 1
+		while ipart <= Nparts[Isyst][ibar] do
+			local tok = tonumber(tokens[itoken])
+			if not tok or tok == 0 then
+			warn_ln("bars: '",tokens[itoken],"' should be numeric and nonzero")
+				Nparts[Isyst][ibar] = Nparts[Isyst][ibar] - 1
+				itoken = itoken + 1
+			end
+			PartShare[ibar][ipart] = tok
+			Proportion[ibar] = Proportion[ibar] + tok
+			itoken = itoken + 1;  ipart = ipart + 1
+		end
+		sumofproportions   = sumofproportions   + Proportion[ibar]
+		sumofspaceatstarts = sumofspaceatstarts + spaceatstart[ibar]
+		::nextbar::
+	end
+	Nbars[Isyst] = nbars
+	if XmlOpt then Ibar = 0; Istave = 1 return end
+	-- 3.1f avoid division by zero:
+	if sumofproportions == 0 then sumofproportions = 1 end
+	-- divide up the line between the bars according to these proportions ...
+	local lmargin = Lmargin[Isyst] + SpaceForClef*maxstvhgt
+	local xperproportion = (Rmargin[Isyst]-Lmargin[Isyst]-sumofspaceatstarts
+		- SpaceForClef*maxstvhgt) / sumofproportions
+	local x = lmargin
+	Xbar[Isyst] = {}
+	Xbar[Isyst][0] = Lmargin[Isyst]
+	if bit32.band(BarType[Isyst][0], 8) > 0.5 then   -- Segno at first bar ?
+		printf("%g %g %g segno", lmargin,
+		  Ystave[Isyst][1] + StaveHeight[Isyst][1]*SegnoHeight,
+		  StaveHeight[Isyst][1])
+	end
+	for ib = 1,Nbars[Isyst] do
+		x = x + xperproportion * Proportion[ib] + spaceatstart[ib]
+		Xbar[Isyst][ib] = x
+		ps_barline(x, Isyst, ib)
+	end
+	Ibar = 0; Istave = 0   -- these are globals.
+end
+
+local function changestave (stavestr)
+	local stave = match(tostring(stavestr), "^(%d+)")
+	stave = tonumber(stave)
+	if not MIDI and not XmlOpt then
+		if stave > Nstaves[Isyst] then
+			print("% ERROR: stave = "..tostring(stave)..', but system '..
+			  tostring(Isyst)..' only has '..tostring(Nstaves[stave])..
+			  ' staves')
+			warn_ln("stavenumber "..tostring(stave)..' too big for system '..
+			  tostring(Isyst))
+			stave = Nstaves[Isyst]
+		elseif stave < 1 then
+			print("% ERROR: stave = "..tostring(stave)..
+			  ", should be at least one")
+			warn_ln("stavenumber "..tostring(stave).." too small")
+			stave = 1
+		end
+		Ystv      = Ystave[Isyst][Istave]      -- timesaver
+		-- used by ps_event() ps_ypitch() ps_rest() ps_ledger_lines()
+		StvHgt = StaveHeight[Isyst][Istave]
+	end
+	Istave      = stave
+	DefaultStem = match(tostring(stavestr), "^%d+([,']?)$")
+	return true
+end
+
+local function reset_accidentalled (s)
+	if not s or s == '' or s == '0' then Accidentalled = {} ; return end
+	local num,sign = match(s, '^([1-7])([#bn])$')
+	-- warn('reset_accidentalled: s=',s,' num=',num,' sign=',sign)
+	if     sign == '#' then pitches = {'F','C','G','D','A','E','B'}
+	elseif sign == 'b' then pitches = {'B','E','A','D','G','C','F'}
+	end
+	Accidentalled = {}
+	local i = 1; while i <= tonumber(num) do
+		local letter = pitches[i]
+		Accidentalled[letter..'__'] = sign
+		Accidentalled[letter..'_']  = sign
+		Accidentalled[letter]       = sign
+		letter = string.lower(letter)
+		Accidentalled[letter]       = sign
+		Accidentalled[letter..'~']  = sign
+		Accidentalled[letter..'~~'] = sign
+		i = i + 1
+	end
+end
+
+local function midi_timesig (str)
+	if not MIDI then return end
+	-- should return here if !$str and midi_timesig has already been called.
+	local timesig, parts = table.unpack(split(str, ' +', 2))
+	local cc
+	local s1,s2 = match(timesig, '^(%d+)/(%d+)$')
+	if not timesig or timesig == '' then
+		timesig = MidiTimesig
+	elseif not s2 then
+		if find(timesig, '^[.%d]+$') then -- put it back
+			if parts then parts = timesig..' '..parts
+			else          parts = timesig
+			end
+		else
+			warn_ln("strange timesig ",timesig) ; return false
+		end
+	elseif timesig ~= MidiTimesig  then
+		-- time signature ...  could be in a sub
+		local nn = tonumber(s1) ; local bottom = tonumber(s2)
+		local dd=0 ; while true do
+			if 2^dd >= bottom then break end
+			dd = dd + 1
+		end
+		if bottom == 8  then
+			if nn%3==0 then cc=round(TPC*1.5) else cc=round(TPC*0.5) end
+		elseif bottom == 16  then
+			if nn%3==0 then cc=round(TPC*0.75) else cc=round(TPC*0.25) end
+		elseif bottom == 32  then
+			if nn%3==0 then cc=round(TPC*.375) else cc=round(TPC*.125) end
+		else cc = TPC * 4.0 / bottom
+		end
+		-- tweak the following globals ...
+		table.insert(MidiScore,{'time_signature',TicksAtBarStart,nn,dd,cc,8})
+		MidiTimesig = timesig
+		TicksPerMidiBeat = cc
+		TicksThisBar = round(384 * nn / bottom)
+	end
+	if MidiBarlines then comment("barline "..MidiTimesig) end   -- 3.1f
+	if not TicksThisBar or TicksThisBar==0 then TicksThisBar = TPC * 4 end
+	-- tempo changes ...
+	-- return if $parts == $MidiBarParts;
+	if not parts or parts == '' then
+		parts = MidiBarParts
+	else
+		MidiBarParts = parts
+	end
+	local parts_a = split(parts, ' +')
+	local ticksperpart = TicksThisBar / #parts_a
+	for i,part_str in ipairs(parts_a) do
+		local starttime = round(TicksAtBarStart + ticksperpart*(i-1))
+		local part = tonumber(part_str) or 2.0
+		if part < 10 then -- secs per part -> uSec per cro
+			MidiTempo = round(TPC * 1000000 * part / ticksperpart)
+		else -- beats per minute -> uSec per cro
+			MidiTempo = round(60000000 * TPC / (TicksPerMidiBeat*part))
+		end
+		if MidiTempo ~= OldMidiTempo then
+			table.insert(MidiScore, {'set_tempo',starttime,MidiTempo})
+			OldMidiTempo = MidiTempo
+		end
+	end
+end
+
+local function newsystem ()
+	if MIDI then return end
+	if XmlOpt then Isyst = Isyst + 1; Xml['staves'] = '1' return end
+	  -- could also add <print new-system="yes"/>
+	  -- See Mario Lang in ~/Mail/musicxml ...
+	ps_finish_ties()	-- first put in any unfinished ties ...
+	-- 20100424 In order to carry beams over barline, we'll need to
+	-- remember a separate @BeamUp etc per stavenum :-(
+	BeamUp = {}; BeamDown = {}
+	StartBeamUp = false; StartBeamDown = false   -- 2.9z
+	if Isyst >= RememberNsystems then -- global, set by systems()
+		systems()
+		-- regurgitate remembered header lines (except for title) ...
+		if RememberHeader['pagenum'] then ps_pagenum() ; ps_innerhead()
+		else ps_lefthead() ; ps_righthead()
+		end
+		ps_leftfoot() ; ps_rightfoot()
+	end
+	Isyst = Isyst + 1        -- then move on to next system ...
+	Istave = 0
+	JustDidNewsystem = true  -- so if no bars cmd follows, barlines get drawn
+	print_tty(' '..tostring(Isyst))
+	print_sp("% system ",Isyst)
+end
+
+function xml_timesig (str)
+	if not XmlOpt then return end
+	if str then Xml['previous timesig line'] = str
+	else  str = Xml['previous timesig line']
+	end
+	local timesig, parts = table.unpack(split(str,' +',2))
+	if not timesig or timesig == '' then return end
+	if not find(timesig, '^%d+/%d+$') then
+		if find(timesig, '^[.%d]+$') then
+			parts = timesig..' '..parts -- put it back
+			timesig = XmlTimesig
+		else
+			warn_ln('strange timesig '..timesig) ; return false
+		end
+	end
+	if not parts then return end
+	local nn,bottom = match(timesig, '^(%d+)/(%d+)$')
+	nn = tonumber(nn) ; bottom = tonumber(bottom)
+	local cro_per_bar = 4 * nn / bottom
+	parts = split(parts, ' +')
+	local cro_per_part   = cro_per_bar / #parts
+	local ticks_per_part = cro_per_bar * TPC / #parts  -- float
+	local ticks_so_far = 0  -- int
+	for ipart,part in ipairs(parts) do
+		part = tonumber(part)
+		local secs_this_part
+		if part < 10  then secs_this_part = part
+		else
+			secs_this_part = 60 * cro_per_bar / part
+			if (nn%3) < 0.5 and (bottom == 8 or bottom == 16) then
+				secs_this_part = secs_this_part * 12 / bottom
+			end
+		end
+		if secs_this_part < 0.1 then
+			warn_ln('warning: secs_this_part=',secs_this_part)
+			goto nextpart
+		end
+		local tempo_this_part = 60 * cro_per_part / secs_this_part
+		XmlCache[#XmlCache+1] =
+		 string.format('\t\t\t<sound tempo="%g"/>\n', tempo_this_part)
+		if ipart >= #parts then break end
+		local new_ticks_so_far = round(ipart * ticks_per_part)
+		local ticks_this_part = new_ticks_so_far - ticks_so_far
+		XmlCache[#XmlCache+1] = '\t\t\t<forward><duration>'..
+		  tostring(ticks_this_part)..'</duration></forward>'
+		ticks_so_far = new_ticks_so_far
+		::nextpart::
+	end
+	if ticks_so_far > 0.5 then
+		XmlCache[#XmlCache+1] = '\t\t\t<backup><duration>'..
+		  tostring(ticks_so_far)..'</duration></backup>'
+	end
+end
+
+function xml_print_barline (bartype)
+	if not XmlOpt then return end
+	-- draws a barline of type bartype. Types: 0 = simple, 1 = double,
+	-- add 2 for end-of-repeat, 4 for start-of-repeat, 8 for Segno
+	local elements = {}
+	if bit32.band(bartype,1) > 0.5 then
+		elements[#elements+1] = '<bar-style>light-heavy</bar-style>'
+	end
+	if bit32.band(bartype,8) > 0.5 then   -- Segno ...
+		elements[#elements+1] = '<segno/>'
+	end
+	if bit32.band(bartype,2) > 0.5 then   -- end repeated section ...
+		elements[#elements+1] = '<repeat direction="backward"/>'
+	end
+	if #elements > 0.5 then
+		print('\t\t\t<barline>'..table.concat(elements,' ')..'</barline>')
+	end
+end
+
+function xml_print_cache ()
+	-- Fussy order ...
+	-- ((footnote?,level?), divisions?, key?, time?, staves?, instruments?,
+	-- clef* , staff-details* , transpose? , directive* , measure-style*)
+	-- at beginning of measure, "staves clef clef.." for all staves :-(
+	-- EACH <attributes> can only contain one key, one time, one instruments
+	--  and one transposes; therefore each stavenum needs its own 
+	if bit32.band((BarType[Isyst][Ibar-1] or 0), 4) > 0.5 then print(
+	  '\t\t\t<barline location="left"><repeat direction="forward"/></barline>')
+	end
+	for k,ca in ipairs(XmlCache) do
+		local t4 = '\t\t\t\t'
+		if type(ca) == 'table' then
+			print("\t\t\t<attributes>")
+			if ca['footnote']  then print(t4..ca['footnote'])  end
+			if ca['level']     then print(t4..ca['level'])     end
+			if ca['divisions'] then print(t4..ca['divisions']) end
+			if ca['key']       then print(t4..ca['key'])       end
+			if ca['time']      then print(t4..ca['time'])      end
+			if Xml['staves'] ~= Xml['remembered_staves'] then
+				print(t4..'<staves>'..Xml['staves']..'</staves>')
+				Xml['remembered_staves'] = Xml['staves']
+			end
+			if ca['instruments'] then
+				print(t4..'<instruments>'..ca['instruments'].."</instruments>")
+			end
+			if ca['clef']      then print(t4..ca['clef'])      end
+			if ca['transpose'] then print(t4..ca['transpose']) end
+			print("\t\t\t</attributes>")
+		else
+			print(ca)
+		end
+	end
+	xml_print_barline(BarType[Isyst][Ibar])
+	XmlCache = {}
+end
+
+function xml_time_attribute (timesig)
+	local beats,beat_type = match(timesig, '(%d+)/(%d+)')
+	return '<time number="'..tostring(Istave)..'"><beats>'..beats..
+	  '</beats><beat-type>'..beat_type..'</beat-type></time>'
+end
+
+function xml_transpose (c)
+	local d = tostring(round(tonumber(c)*0.583333) % 7)
+	Xml['current transpose'] = c
+	return '<transpose>\n\t\t\t\t\t<diatonic>'..d ..
+	  '</diatonic><chromatic>'..c..'</chromatic>\n\t\t\t\t</transpose>'
+end
+
+------------------------------------------------------------------------
+
+local function newbar (line)
+	-- warn('newbar: line = ',line)
+	if MIDI then
+		TicksAtBarStart = TicksAtBarStart + TicksThisBar
+		Ibar = Ibar + 1; Istave = 0
+		-- if line and find(line,'%S') then midi_timesig(line) end
+		midi_timesig(line)
+	elseif XmlOpt then
+		if Xml['measure_number'] ~= '0' then
+			xml_print_cache()
+			print("\t\t</measure>")
+		end
+		Xml['measure_number'] = tostring(tonumber(Xml['measure_number']) + 1)
+		Ibar = Ibar + 1 ; Istave = 0   -- globals.
+		if Ibar > Nbars[Isyst] then newsystem('/') ; bars() ; Ibar=1 end
+		print('\t\t<measure number="'..Xml['measure_number']..'">')
+		Xml['backup'] = '0'
+		Xml['voice']  = '0'
+		Xml['staves'] = '1'
+		xml_timesig(line[1])
+	else 
+		if Isyst>0.5 and bit32.band(BarType[Isyst][Ibar],2)>0.5 then
+			ps_finish_ties(Xbar[Isyst][Ibar])  -- is :|| or :||:
+		end
+		Ibar = Ibar + 1 ; Istave = 0   -- globals.
+		if Ibar > (Nbars[Isyst] or 0) then
+			if not JustDidNewsystem then newsystem('/') end
+			bars(); Ibar = 1  --XXXX
+		end
+		JustDidNewsystem = false
+		Stave2nullkeysigDx = {}  -- 2.9y
+		print("% page "..tostring(PageNum)..", sys "..tostring(Isyst)..
+		  ", bar "..tostring(Ibar)..":")
+	end
+end
+
+-------------------------- MIDI stuff -------------------------------
+
+local function midi_cc_127 (cha, num, val)
+	if val>127 then val=127 elseif val<0 then val=0 end
+	local ticks = TicksAtBarStart + CrosSoFar*TicksPerCro
+	table.insert(MidiScore, {'control_change', ticks, cha, num, val})
+end
+
+local function midi_cc_100 (cha, num, percent)
+	midi_cc_127(cha, num, round(percent*1.27))
+end
+
+local function midi_expression (ticks, cha, val)
+	cha = tonumber(cha)
+	if MidiExpression[cha] == val then return end
+	if val>127 then val=127 end  -- 3.2i
+	table.insert(MidiScore, {'control_change', ticks, cha, 11, val})
+	MidiExpression[cha] = val
+end
+
+local function midi_global (s)
+	local a = split (gsub(s,'%s+#.*$',''), '%s*[ =]%s*')
+	local str = {} ; for i=1,#a,2 do str[a[i]] = a[i+1] end
+	cha = str['channel'] or str['cha']
+	if XmlOpt then  -- the Parts mean MIDI-Tracks - we use one track
+		local t3 = "\t\t\t" ; local t4 = "\t\t\t\t"
+		if cha then
+			local pan = ''
+			if str['pan'] then
+				pan = string.format(' pan="%d"',
+				  math.floor((tonumber(str['pan'])-50) * 1.8))
+			end
+			XmlCache[#XmlCache+1] = t3..'<sound'..pan..
+			  '><midi-instrument id="cha'..tostring(tonumber(cha)+1)..'">'
+			if str['patch'] then
+				local program = tostring(tonumber(str['patch']) + 1)
+				XmlCache[#XmlCache+1] =
+				 t4..'<midi-program>'..program..'</midi-program>'
+			end
+			XmlCache[#XmlCache+1] = t3..'</midi-instrument></sound>'
+		end
+	elseif MIDI then
+		if str['barlines'] then
+			if str['barlines'] == 'off' then MidiBarlines = false
+			else MidiBarlines = true
+			end
+		end
+		if str['gm'] then  -- 2.9s
+			local sysex = {
+				['1']    = "\x7E\x7F\x09\x01\xF7",
+				['on']   = "\x7E\x7F\x09\x01\xF7",
+				['off']  = "\x7E\x7F\x09\x02\xF7",
+				['2']    = "\x7E\x7F\x09\x03\xF7",
+			}
+			if sysex[str['gm']] then
+				table.insert(MidiScore,
+				  {'sysex_f0', TicksAtBarStart, sysex[str['gm']]})
+				TicksAtBarStart = TicksAtBarStart + 100
+			else
+				warn_ln("gm should be one of off,on,1,2 in '"..s.."'")
+			end
+		end
+		if str['temperament'] then   -- 2.9s
+			local sysex = "\x7E\x7F\x08\x08\x7F\x7F\x7F" -- on all channels
+			local tuning = {
+			  equal      = "\x40\x40\x40\x40\x40\x40\x40\x40\x40\x40\x40\x40",
+			  billam     = "\x42\x3E\x40\x42\x3E\x43\x3C\x41\x40\x3F\x44\x3D",
+			  vanbiezen  = "\x44\x3E\x40\x42\x3C\x46\x3C\x42\x40\x3E\x44\x3A",
+			  kirnberger = "\x44\x3C\x40\x44\x3C\x46\x38\x42\x40\x3E\x48\x3A",
+			}
+			if tuning[str['temperament']] then
+				table.insert(MidiScore, {'sysex_f0', TicksAtBarStart,
+				 sysex..tuning[str['temperament']].."\xF7"})
+				TicksAtBarStart = TicksAtBarStart + 50
+			else 
+				warn_ln("strange temperament in '"..s.."'")
+				warn(" should be one of: billam equal kirnberger vanbiezen")
+			end
+		end
+		if str['bank'] then    -- 2.9r
+			-- 3.1g check for digits, and use $lsb or 0 (e.g. "Bank5")
+			local s1,s2
+			s1,s2 =  match(str['bank'],'^(%d+),(%d+)$')
+			if s2 then
+				midi_cc_127(cha, 0, tonumber(s1))
+				midi_cc_127(cha,32, tonumber(s2))
+			else
+				s1 =  match(str['bank'],'^(%d+)$')
+				if s1 then midi_cc_127(cha, 0, tonumber(s1))
+				else warn_ln("strange bank msb or msb,lsb in '"..s.."'")
+				end
+			end
+		end
+		if str['cents']  then  -- 2.9s, 3.1u
+			-- Master Fine|Coarse Tuning are global, not per-channel.
+			local cents = tonumber(str['cents'])
+			local st = round(cents/100)  -- 3.1u
+			cents = cents - 100*st;
+			-- emit the Master Coarse Tuning sysex  p.141
+			-- XXX could remember if it's unchanged since the last midi cents ?
+			if st>24 then st=24 elseif st<-24 then st=-24 end
+			local msb = string.char(64 + st)
+			local sysex = "\x7F\x7F\x04\x04\x00"..msb.."\xF7"
+			table.insert(MidiScore, {'sysex_f0', TicksAtBarStart, sysex})
+			TicksAtBarStart = TicksAtBarStart + 50;
+			-- emit the  Master Fine Tuning  sysex  p.141
+			msb = string.char(64 + round(cents*64/100))
+			sysex = "\x7F\x7F\x04\x03\x00"..msb.."\xF7"
+			table.insert(MidiScore, {'sysex_f0', TicksAtBarStart, sysex})
+			TicksAtBarStart = TicksAtBarStart + 50;
+		end
+		if cha and cha ~= '' then
+			if str['patch'] then
+				table.insert(MidiScore,
+				 {'patch_change', TicksAtBarStart, cha, str['patch']})
+				TicksAtBarStart = TicksAtBarStart + 5
+				-- enforce default expression, for subsequent cre and dim
+				midi_expression(TicksAtBarStart,cha,100)
+			end
+			if str['pan'] then
+				local pan = tonumber(str['pan'])
+				if pan>100 then pan=100 elseif pan<1 then pan=1 end
+				midi_cc_100(cha,10,pan)
+				Stave2pan[Istave] = pan
+			end
+			if str['reverb']  then midi_cc_100(cha,91,str['reverb']) end
+			if str['rate']    then midi_cc_100(cha,76,str['rate']) end
+			if str['vibrato'] then midi_cc_100(cha,77,str['vibrato']) end
+			if str['vib']     then midi_cc_100(cha,77,str['vib})']) end
+			if str['delay']   then midi_cc_100(cha,78,str['delay']) end
+			if str['chorus']  then midi_cc_100(cha,93,str['chorus']) end
+			if str['tra']       then
+				Cha2transpose[cha] = tonumber(str['tra'])
+			end
+			if str['transpose'] then   -- 3.1u
+				Cha2transpose[cha] = tonumber(str['transpose'])
+			end
+		elseif str['pause'] then
+			if MidiTempo then  -- uSec per crochet
+				TicksAtBarStart = TicksAtBarStart +
+				  round(tonumber(str['pause'])*TPC*1000000/MidiTempo)
+			end
+		else
+			warn_ln("strange midi_global "..s.."\n")
+		end
+	end
+end
+
+local function current_volume ()
+	return Stave2volume[Istave] or DefaultVolume
+end
+local function current_pan ()
+		return Stave2pan[Istave] or 50
+end
+local function current_bend ()   -- 3.2  cha2bend ? for incremental bend+2 ?
+	return Stave2bend[Istave] or false
+end
+
+function midi_in_stave (str)
+	if not str then return end
+	local s1
+	if find(str,'^vol') then
+		-- warn('midi_in_stave: Istave = ',Istave,' str = "',str,'"')
+		s1 = match(str, '^vol(%d+)$') ; if s1 then -- 3.2a u?m?e?
+			local vol = tonumber(s1); if vol > 127 then vol = 127 end
+			Stave2volume[Istave] = vol; return true
+		end
+		s1 = match(str, '^vol%+(%d+)$') ; if s1 then -- 3.2a u?m?e?
+			local vol = current_volume() + tonumber(s1)
+			if vol > 127 then vol = 127 end
+			Stave2volume[Istave] = vol; return true
+		end
+		s1 = match(str, '^vol%-(%d+)$') ; if s1 then -- 3.2a u?m?e?
+			local vol = current_volume() - tonumber(s1)
+			if vol < 2 then vol = 1 end
+			Stave2volume[Istave] = vol; return true
+		end
+		warn_ln("strange vol command: ", str); return false
+	end
+	s1 = match(str, '^leg(%d+)$') ; if s1 then  -- 3.2 remove a?t?o?
+		Stave2legato[Istave] = 0.01*tonumber(s1); return true
+	end
+	s1 = match(str, '^cha(%d[%+%d]*)$') ; if s1 then  -- 3.1v, 3.2
+		local channels = split(s1, '%+')     -- 3.1v
+		for i=1,#channels do channels[i] = tonumber(channels[i]) end
+		Stave2channels[Istave] = channels
+		return true
+	end
+	if find(str,'^pan') then
+		-- the logic in the Perl version seems suspect here...
+		local pan = 50
+		s1 = match(str, '^pan(%d+)$') ; if s1 then
+			pan = tonumber(s1)
+			if pan > 100 then pan = 100 end
+		else
+			s1 = match(str, '^pan%+(%d+)$') ; if s1 then
+				pan = (Stave2pan[Istave] or 50) + tonumber(s1)
+				if pan > 100 then pan = 100 end
+			else
+				s1 = match(str, '^pan-(%d+)$') ; if s1 then
+					pan = (Stave2pan[Istave] or 50) - tonumber(s1)
+					if pan < 2 then pan = 1 end
+				else
+					warn_ln("strange pan command ", str) ; return false
+				end
+			end
+		end
+		for i,cha in pairs(Stave2channels[Istave]) do
+			midi_cc_100(cha,10,pan)
+		end
+		Stave2pan[Istave] = pan
+		return true
+	end
+	s1 = match(str, '^tra([-%+]?%d+)$') ; if s1 then
+		if XmlOpt then  -- 2.8u
+			local attributes = {}
+			attributes['transpose'] = xml_transpose(s1);
+			table.insert(XmlCache, attributes)
+			-- c is a BUG. Have to go through an if-then-else as for pan...
+			-- but I think it's maybe a useless noop anyway...
+			-- Xml['current transpose'] = c   -- 2.8u
+			-- XXX should remember _when_ this takes place
+		end
+		Stave2transpose[Istave] = tonumber(s1) ; return true
+	end
+	s1 = match(str, '^vib(%d+)$') ; if s1 then  -- 3.2 remove r?a?t?o?
+		if XmlOpt then return true end
+		local ticks    = TicksAtBarStart + CrosSoFar*TicksPerCro
+		local val = round(tonumber(s1)*1.27)  -- 0..100 to 1..127
+		if val>127 then val=127 elseif val<0 then val=0 end
+		for i,cha in ipairs(Stave2channels[Istave]) do   -- 3.1v
+			table.insert(MidiScore, {'control_change', ticks, cha, 77, val})
+		end
+		return true
+	end
+	s1,s2 = match(str, '^cc(%d+)=(%d+)$') ; if s2 then   -- 3.0e
+		if XmlOpt then return true end
+		local cc = tonumber(s1); local val = tonumber(s2)
+		if  cc>127 then cc=127 end
+		if val>127 then val=127 end
+		local ticks    = TicksAtBarStart + CrosSoFar*TicksPerCro
+		for i,cha in ipairs(Stave2channels[Istave]) do   -- 3.1v
+			table.insert(MidiScore,{'control_change',ticks,cha,cc,val})
+		end
+		return true   -- 3.1w
+	end
+	s1 = match(str, '^bend') ; if s1 then  -- 3.0f   3.2a
+		if XmlOpt then return true end
+		-- 4 cent steps are usually OK; decimal points could be allowed
+		-- for finer steps; plus, a -bend note-option would use fine steps
+		-- though there we'll need bendup and benddown :-(
+		local val    -- 0..100
+		local bend   -- -8191..8192
+		s1 = match(str, '^bend(%d+)$') ; if s1 then
+			val = tonumber(s1) ; if val>100 then val = 100 end
+			bend = round((val-50) * 163.82);
+			if bend>8192 then bend=8192 elseif bend<-8191 then bend=-8191 end
+		else
+			s1 = match(str, '^bend%+(%d+)$') ; if s1 then
+				val = round(tonumber(s1) * 163.82)
+				bend = current_bend() + val
+				if bend > 8192 then bend = 8192 end
+			else
+				s1 = match(str, '^bend-(%d+)$') ; if s1 then
+					val = round(tonumber(s1) * 163.82)
+					bend = current_bend() - val
+					if bend < -8191 then bend = -8191 end
+				else
+					warn_ln("strange bend command '"..str"'\n") ; return true
+				end
+			end
+		end
+		Stave2bend[Istave] = bend
+		local ticks = TicksAtBarStart + CrosSoFar*TicksPerCro;
+		for i,cha in ipairs(Stave2channels[Istave]) do   -- 3.1v
+			table.insert(MidiScore,{'pitch_wheel_change', ticks, cha, bend})
+		end
+		return true   -- 3.1w
+	else
+		return false
+	end
+end
+
+local function midi_event_option (option, starttime, cha)   -- 3.1i
+	if option == '*' then   -- 3.0b
+		table.insert(MidiScore, {'control_change',starttime+1,cha,0x40,0x00})
+		table.remove(MidiPedal,cha)
+	elseif option == 'P' then    -- 3.0b
+		if MidiPedal[cha] then
+		  table.insert(MidiScore,{'control_change',starttime+1,cha,0x40,0x00})
+		end
+		table.insert(MidiScore, {'control_change',starttime+3,cha,0x40,0x7F})
+		MidiPedal[cha] = 1
+	elseif option == '*Sos' then
+		table.insert(MidiScore, {'control_change',starttime+1,cha,0x42,0x00})
+		table.remove(MidiSosPed,cha)
+	elseif option == 'Sos' then  -- 3.0g
+		if MidiSosPed[cha] then
+		  table.insert(MidiScore, {'control_change',starttime+1,cha,0x42,0x00})
+		end
+		table.insert(MidiScore, {'control_change',starttime+3,cha,0x42,0x7F})
+		MidiSosPed[cha] = 1
+	elseif option == 'Una'  then  -- 3.1n
+		table.insert(MidiScore, {'control_change',starttime-2,cha,0x43,0x7F})
+		MidiUnaPed[cha] = 1
+	elseif option == 'Tre'  then  -- 3.1n
+		table.insert(MidiScore, {'control_change',starttime-2,cha,0x43,0x00})
+		table.remove(MidiUnaPed, cha)
+	end
+end
+
+local function midi_pitch (pitch)  -- middleC = 60
+	local p = NoteTable[pitch]
+	if     Stave2clef[Istave] == 'treble8va' then p = p + 24
+	elseif Stave2clef[Istave] == 'treble'    then p = p + 12
+	elseif Stave2clef[Istave] == 'bass'      then p = p - 12
+	elseif Stave2clef[Istave] == 'bass8vab'  then p = p - 24
+	end
+	return p
+end
+
+
+
+------------------------- PostScript stuff ----------------------
+
+local function ps_keysig (num, sign, x)
+	if MIDI or XmlOpt then die('ps_keysig called in MIDI or XML mode') end
+	local dx = AccidentalDxInKeysig * MaxStaveHeight[Isyst]
+	local accidental = ''
+	x = x + 0.5 * dx
+	num = tonumber(num) or 0
+	if num < 0 then
+		accidental = 'natural'
+		num = 0 - num  -- 2.8b
+		Stave2nullkeysigDx[Istave] = dx*num + SpaceAfterKeySig*StvHgt -- 2.9y
+	elseif sign == '#' then accidental = 'sharp'
+	elseif sign == 'b' then accidental = 'flat'
+	else return false
+	end
+	local pitches = {}
+	if find(Stave2clef[Istave], '^treble') then
+		if sign == '#' then     pitches = {'f','c','g','d','A','e','B'}
+		elseif sign == 'b' then pitches = {'B','e','A','d','G','c','F'}
+		end
+	elseif Stave2clef[Istave] == 'alto' then
+		if sign == '#' then     pitches = {'f','c','g','d','A','e','B'}
+		elseif sign == 'b' then pitches = {'B','e','A','d','G','c','F'}
+		end
+	elseif Stave2clef[Istave] == 'tenor' then
+		if sign == '#' then     pitches = {'f','c','g','d','A','e','B'}
+		elseif sign == 'b' then pitches = {'B','e','A','d','g','c','f'}
+		end
+	elseif find(Stave2clef[Istave], '^bass') then
+		if sign == '#' then     pitches = {'f','c','g','d','A','e','B'}
+		elseif sign == 'b' then pitches = {'B','e','A','d','G','c','F'}
+		end
+	end
+	for i = 1,num do
+		printf("%g %g %g %s\n", x, ps_ypitch(pitches[i]), StvHgt, accidental)
+		x = x + dx
+	end
+	Xpart[1] = Xpart[1] + dx * num;   -- XXX
+	Xpart[1] = Xpart[1] + SpaceAfterKeySig * StvHgt
+end
+
+local function midi_event (symbols)
+	if not MIDI then die("BUG midi_event called without MIDI set") end
+	local shortest = 99
+	-- Here also, we'll need a measurement loop, to get $total_chord_options
+	-- if type(symbols) == 'string' then symbols = split(symbols, '-') end -- ?
+	if type(symbols) == 'string' then symbols = { symbols, } end -- ?
+	for i,symbol in ipairs(symbols) do
+		local is_note = is_a_note(symbol)
+		if is_note or find(symbol,'^rest') or
+		  find(symbol,'^blank') then
+-- where do CurrentPulse and shortest come from ?
+			if CurrentPulse < shortest then shortest = CurrentPulse end
+		end
+		if Nbeats[symbol] then  -- it's smb min cro qua smq dsq etc
+			-- we need to measure separately shortest stem-up and stem-down !
+			if Nbeats[symbol]<shortest then shortest=Nbeats[symbol] end
+			CurrentPulse = Nbeats[symbol]
+		elseif find(symbol, "^rest[,']*-%S") or
+		 find(symbol, "^blank[,']*-%S") then  -- 3.1i,n,q
+			local options = match(symbol, "^[a-z]+[,']*-(.+)$")
+			if options then
+				local starttime  = TicksAtBarStart + CrosSoFar*TicksPerCro
+				for i,cha in ipairs(Stave2channels[Istave]) do   -- 3.1v
+					for i,option in ipairs(parse_line(options,false)) do
+						midi_event_option(option, starttime, cha)
+					end
+				end
+			end
+		elseif is_note then
+			local noteref    = parse_note(symbol)
+			local pitch      = noteref['pitch']
+			local accidental = noteref['accidental']
+			local options    = noteref['options']
+			-- 3.1s:
+			local starttime = round(TicksAtBarStart + CrosSoFar*TicksPerCro)
+			local fullduration = round(CurrentPulse * TicksPerCro)
+			local duration     = fullduration
+			local legato = Stave2legato[Istave] or DefaultLegato
+			if duration > TPC then
+				duration = duration - round((1.0-legato) * TPC)
+			else
+				duration = round(legato * duration)
+			end
+			for i,cha in ipairs(Stave2channels[Istave]) do   -- 3.1v
+				local note = midi_pitch(pitch..accidental)   -- 3.1u
+				 + (Stave2transpose[Istave] or 0) + (Cha2transpose[cha] or 0)
+				if accidental and accidental ~= '' then
+					Accidentalled[pitch] = accidental
+				else
+					local a = Accidentalled[pitch]
+					if     a == '#'  then note = note+1
+					elseif a == 'b'  then note = note-1
+					elseif a == '##' then note = note+2
+					elseif a == 'bb' then note = note-2
+					end
+				end
+				local velocity = current_volume()
+				local midiexpressions = {} -- array of cre and dim commands
+				for i,option in ipairs(parse_options(options)) do
+					option = gsub(option, "[,']$", "")
+					if     option == 'fermata' then -- tempo down & up again
+		  			elseif option == 'mordent' then
+		  			elseif option == 'tr'   then  -- trill about 10 notes/sec
+		  			elseif option == 'tr#'  then
+		  			elseif option == 'trb'  then
+		  			elseif option == 'trn'  then
+		  			elseif option == 'turn' then
+		  			elseif option == '.' or find(option,'stacc?') then
+						duration = round(0.55 * CurrentPulse * TicksPerCro)
+		  			elseif option == 'ten' then
+						starttime  = starttime - 3
+						duration = CurrentPulse*TicksPerCro + 3;
+						velocity = round(1.15 * velocity)
+						if velocity > 127 then velocity = 127 end
+		  			elseif option == 'emph' then
+						velocity = round(1.3 * velocity)
+						if velocity > 127 then velocity = 127 end
+		  			elseif find(option, '^cre%d+$') then
+						local s1 = match(option, '^cre(%d+)$')
+						table.insert(midiexpressions, tonumber(s1))
+		  			elseif find(option, '^dim%d+$') then
+						local s1 = match(option, '^dim(%d+)$')
+						table.insert(midiexpressions, 0 - tonumber(s1))
+					else  -- pedal options that are also needed by rests...
+						midi_event_option(option, starttime, cha)
+					end
+				end
+				local stemup = is_stemup(noteref)
+				local B = starttime
+				local D = duration
+				local startslur = noteref['startslur']
+				local starttie  = noteref['starttie']
+				local endslur   = noteref['endslur']
+				local endtie    = noteref['endtie']
+				if startslur then StartedSlurs[Istave] = true end
+				if endtie then
+					local e = concat({Istave,endtie,cha},' ')
+					local begref = StartedTies[e]
+					if begref then
+						local begn =   begref[5]
+						if pitch == begref[7] and accidental == '' then
+							note = begn  -- accidental tied from prev bar
+						end
+						if begn == note then
+							local begtime = begref[2]
+							if starttie then -- prolong the remembered note
+								begref[3] = starttime + duration - begtime
+								if starttie ~= endtie then
+								-- the tie-number might have changed, eg )1(2
+								  StartedTies[concat({Istave,starttie,cha},' ')]
+									  = StartedTies[e]
+									StartedTies[e] = nil
+								end
+							else -- output the full-length combined note
+								StartedTies[e] = nil
+								B = begtime
+								D = starttime + duration - begtime
+							end
+						else
+							warn_ln("at "..symbol..": deprecated use"
+							  .." of ( for slur. Use { instead")
+							table.remove(begref)   -- pop old $pitch off end
+							table.insert(MidiScore, begref)
+							StartedTies[e] = nil
+							startslur = starttie
+						end
+					else
+						warn_ln("tie )",endtie," has no corresponding (")
+					end
+				elseif MidiExpression[cha] ~= 100 then
+					-- we're already within a loop over channels
+					midi_expression(B, cha, 100)
+				end
+				if StartedSlurs[Istave] then
+					if endslur then table.remove(StartedSlurs,Istave)
+					else D = D + fullduration - duration
+					end
+				end
+				if #midiexpressions > 0.5 then -- 2.7a cre and dim
+					-- could also pan+50, 20141118 could also bend
+					local n = #midiexpressions
+					local begin_section = B
+					local duration = D
+					if starttie then duration = fullduration end
+					local ticks_per_section = round(duration / n)
+					local expression = 100
+					if midiexpressions[1] > 125 then expression = 1 -- 3.2i
+					elseif (expression+midiexpressions[1]) > 127 then
+						expression = 127 - midiexpressions[1]
+					end
+					for j,expr in ipairs(midiexpressions) do
+						if   (expression+expr) > 127 then expr=127-expression
+						elseif (expression+expr) < 1 then expr=0-expression
+						end
+-- 20141104  should leave at least, say, 5ms  between each cc-change !
+						local step = math.floor(
+							1.01 + 5*math.abs(expr)/ticks_per_section)
+-- $MidiTempo = uSec-per-cro ;    $TPC = ticks-per-cro
+-- ticks_per_5000uS = int(1.01 + 5000 * $TPC / $MidiTempo)
+						if expr < 0 then step = 0 - step end
+						local nsteps = round(expr / step)
+						if nsteps<0.5 then
+							begin_section = begin_section + ticks_per_section
+							goto nextexpr
+						end
+						for i = 1,nsteps do
+							expression = expression + step
+							local ticks = round(
+							  begin_section + i*ticks_per_section/(1+nsteps))
+							midi_expression(ticks, cha, expression)
+						end
+						begin_section = begin_section + ticks_per_section
+						::nextexpr::
+					end
+				end
+				if starttie then
+					if not endtie then  -- 2.4e
+						StartedTies[concat({Istave,starttie,cha}, ' ')] =
+						  {'note',B,fullduration,cha,note,velocity,pitch}
+					end
+				else
+					-- Difficult bug here if a voice crosses through a tied note
+					-- in the other voice on the same stave it terminates it :-(
+					table.insert(MidiScore, {'note',B,D,cha,note,velocity})
+				end
+			end
+		end
+	end
+	CrosSoFar = CrosSoFar + shortest
+	return
+end
+
+local function midi_play_wav (cmd)  -- 3.2e
+	local ticks  = TicksAtBarStart + CrosSoFar*TicksPerCro
+	table.insert(MidiScore,{'sysex_f0',TicksAtBarStart,'}!play '..cmd.."\xF7"})
+	TicksAtBarStart = TicksAtBarStart + 1
+	return true
+end
+
+
+local function midi_write ()
+	if not MIDI then return end
+	local ticks    = TicksAtBarStart + CrosSoFar*TicksPerCro
+	for cha,v in pairs(MidiPedal)  do   -- 3.0b
+		table.insert(MidiScore, {'control_change', ticks, cha, 0x40, 0x00})
+		ticks = ticks + 1
+	end
+	for cha,v in pairs(MidiSosPed) do  -- 3.1n, 3.1v
+		table.insert(MidiScore, {'control_change', ticks, cha, 0x44, 0x00})
+		ticks = ticks + 1
+	end
+	for cha,v in pairs(MidiUnaPed) do  -- 3.1n
+		table.insert(MidiScore, {'control_change', ticks, cha, 0x43, 0x00})
+		ticks = ticks + 1
+	end
+	table.insert(MidiScore, {'marker', ticks, 'final_barline'}) -- 2.8f
+	-- warn(DataDumper(MidiScore))
+	io.write(MIDI.score2midi({TPC, MidiScore}))
+end
+
+-------------------------- XML stuff -------------------------------
+function xml_header (line)
+	local date = os.date('%Y-%m-%d')
+	local dtd = "http://www.musicxml.org/dtds/partwise.dtd"
+	local devel_dtd ="/home/pjb/musicxml/dtds/partwise.dtd"
+	if not Xml['header begun'] then Xml['header begun'] = true ; print([[
+<?xml version="1.0" encoding="ISO-8859-1" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 1.1 Partwise//EN"
+ "]]..dtd..[[">
+<score-partwise>]])
+	end
+	if find(line, '^%d+%s+system') then systems("") ; return true end
+	local s1 = match(line, '^title (%S.*)$') ; if s1 then
+		printf("\t<movement-title>%s</movement-title>",
+		 escape_and_utf2iso(s1))
+		return true
+	end
+	s1 = match(line, '^leftfoot (%S.*)$') ; if s1 then
+		Xml['credit'] = escape_and_utf2iso(s1) ; return true
+	end
+	if find(line, '^left')    then return true end
+	if find(line, '^right')   then return true end
+	if find(line, '^inner')   then return true end
+	if find(line, '^pagenum') then return true end
+	print([[
+	<identification>
+		<encoding>
+			<software>muscript ]]..Version..[[</software>
+			<encoding-date>]]..date..[[</encoding-date>
+		</encoding>
+	</identification>]])
+	if Xml['credit'] then
+		print("\t<credit><credit-words>\n\t\t"..Xml['credit'] ..
+		  "\n\t</credit-words></credit>\n")
+	end
+	print([[
+	<part-list>
+		<score-part id="P1">
+			<part-name>MIDI Track 1</part-name>]])
+	-- with readahead, we wouldn't need to set up all 16 channels...
+	for i = 1,16 do
+		local cha = tostring(i)
+		print([[
+			<score-instrument id="cha]]..cha..[[">
+				<instrument-name>cha]]..cha..[[</instrument-name>
+			</score-instrument>]])
+	end
+	for i = 1,16 do
+		local cha = tostring(i)
+		print([[
+			<midi-instrument id="cha]]..cha..[[">
+				<midi-channel>]]..cha..[[</midi-channel>
+			</midi-instrument>]])
+	end
+	print([[
+		</score-part>
+	</part-list>
+	<part id="P1">]])
+	return false
+end
+
+local function xml_text (text_type, size, vertpos, text)
+	if not XmlOpt then return false end
+	text = escape_and_utf2iso(text)
+	local font_size = 'medium';
+	if     find(size,'l') then font_size = 'large'
+	elseif find(size,'s') then font_size = 'small'
+	end
+	local font_weight = 'normal'
+	if find(text_type,'[bI]') then font_weight = 'bold' end
+	local font_style = 'normal'
+	if find(text_type,'[iI]') then font_style = 'italic' end
+	if not vertpos then vertpos = TextBelowStave end
+	local ytext = 40.0 * vertpos - 80.0  -- should measure gap, like &ps_text
+	if Istave == 0 then   -- above the top stave in the system
+		ytext = 40.0 * vertpos
+	elseif Istave < Nstaves[Isyst] then   -- text lies between staves
+		local netgap = GapHeight[Isyst][Istave] - TextSize*StvHgt
+		ytext = -40.0 - (1.0-vertpos) * netgap * 40.0 / StvHgt
+	else   -- below the bottom stave in the system
+		ytext = -40.0 -  40.0 * vertpos
+	end
+	local t3 = "\t\t\t" ;     local t4 = "\t\t\t\t"
+	local t5 = "\t\t\t\t\t" ; local t6 = "\t\t\t\t\t\t"
+	text = gsub(text, '%.%d+ ', ' ')
+	-- $text =~ s/ /#x0020/g;  -- this xml hex notation not respected by mscore?
+	XmlCache[#XmlCache+1] = t3.."<direction>\n"
+	XmlCache[#XmlCache+1]=t4..'<direction-type>\n'..t5..'<words halign="left" '
+	if 0.1 < math.abs(ytext) then
+		XmlCache[#XmlCache+1] = string.format('default-y="%g" ', ytext)
+	end
+	XmlCache[#XmlCache+1] = 'font-style="'..font_style..'" '
+	XmlCache[#XmlCache+1] =
+	  'font-size="'..font_size..'" font-weight="'..font_weight..'">'
+	XmlCache[#XmlCache+1] = text..'</words>\n'..t4..'</direction-type>\n'
+	if Istave > 0.5 then XmlCache[#XmlCache+1] =
+		 t4..'<staff>'..istave..'</staff>\n'..t3..'</direction>\n'
+	else 
+		XmlCache[#XmlCache+1] = t4..'<staff>1</staff>\n'..t3..'</direction>\n'
+	end
+end
+
+function xml_keysig  (keysig)
+	local s1,s2 = match(keysig,'(%d+)([#bn]*)')
+	local fifths = s1 or '0' ;  local acc = s2 or ''
+	if     find(acc,'b$') then fifths = '-'..fifths
+	elseif find(acc,'n$') then fifths = '0'
+	end
+	return
+	'<key number="'..tostring(Istave)..'"><fifths>'..fifths..'</fifths></key>';
+end
+
+function xml_pitch (pitch, accidental)
+	local step = gsub(pitch, '[a-g]',
+	  function (c) return string.upper(c) end)
+	local octave = 4
+	if find(pitch, '[A-G]') then
+		pitch = gsub(pitch, '[A-G]',
+		  function (c) return string.lower(c) end)
+		octave = 3
+	end
+	if     Stave2clef[Istave] == 'treble8va' then octave = octave + 2
+	elseif Stave2clef[Istave] == 'treble'    then octave = octave + 1
+	elseif Stave2clef[Istave] == 'bass'      then octave = octave - 1
+	elseif Stave2clef[Istave] == 'bass8vab'  then octave = octave - 2
+	end
+	local  nup  = 0 ; step, nup  = gsub(step, '~', '')
+	local ndown = 0 ; step,ndown = gsub(step, '_', '')
+	octave = octave + nup - ndown
+	local alter = ''   -- 2.8u
+	if accidental and accidental ~= '' then
+		Accidentalled[pitch] = accidental
+		alter = '<alter>'..Accidental2alter[accidental]..'</alter>'
+	elseif Accidentalled[pitch] then
+		alter = '<alter>'..Accidental2alter[Accidentalled[pitch]]..'</alter>'
+	end
+	return '<pitch><step>'..step..'</step>'..alter..
+	  '<octave>'..tostring(octave)..'</octave></pitch>'
+end
+
+function xml_event (symbols)
+	if not XmlOpt then die("BUG xml_event called without XmlOpt set\n") end
+	local i_note = 0
+	local t1 = "\t" ;  local t4 = "\t\t\t\t"; local t5 = "\t\t\t\t\t"
+	local t2 = "\t\t"; local t3 = "\t\t\t" ;  local t6 = "\t\t\t\t\t\t"
+	local shortest = 9999
+	for i,symbol in ipairs(symbols) do
+		is_note = is_a_note(symbol)
+		if is_note or
+		  find(symbol,'^rest') or find(symbol,'^blank') then
+			if CurrentPulse < shortest then shortest = CurrentPulse end
+		end
+		if Nbeats[symbol] then  -- it's smb min cro qua smq dsq etc
+			-- we need to measure separately shortest stem-up and stem-down !
+			if Nbeats[symbol]<shortest then shortest=Nbeats[symbol] end
+			CurrentPulse = Nbeats[symbol]
+			CurrentPulseText = symbol
+		elseif is_note then
+			local noteref = parse_note(symbol)
+			-- go through the options first; they can influence <note> element
+			local notations = {}
+			if noteref['endslur'] then
+				local updown = 'below'
+				if (noteref['endslur']%2) > 0.5 then updown = 'above' end
+				notations[#notations+1] =
+				 '<slur type="stop" placement="'..updown..'"/>'
+			end
+			if noteref['startslur'] then
+				local updown = 'below'
+				if (noteref['startslur']%2) > 0.5 then updown = 'above' end
+				notations[#notations+1] =
+				 '<slur type="start" placement="'..updown..'"/>'
+			end
+			if noteref['endtie'] then
+				local updown = 'below'
+				if (noteref['endtie']%2) > 0.5 then updown = 'above' end
+				notations[#notations+1] =
+				 '<tied type="stop" placement="'..updown..'"/>'
+			end
+			if noteref['starttie'] then
+				local updown = 'below'
+				if (noteref['starttie']%2) > 0.5 then updown = 'above' end
+				notations[#notations+1] =
+				 '<tied type="start" placement="'..updown..'"/>'
+			end
+			-- fermata is an xml notation; stacc, tenuto, emph are xml
+			-- articulations,  and an articulation is an xml notation;
+			-- tr, turn, mordent are xml ornaments
+			--  and an ornament is an xml notation.
+			local articulations = {}
+			local ornaments     = {}
+			local is_staccato   = false
+			local is_emphasis   = false
+			local options = noteref['options']
+			-- $options =~ s{'}{\\'}g;
+			if options and not Opt_Cache[options] then
+				Opt_Cache[options] = parse_options(options)
+			end
+			for i,o in ipairs(Opt_Cache[options] or {}) do
+				local option = o   -- don't clobber the cache or the loopvar
+				--$option =~ s{\\'}{'}g;
+				local option_is_above = true
+				if find(option,',$') then
+					option_is_above = false
+					option = gsub(option, ',$', '')
+				end
+				-- need to duplicate the 3.1d code below
+				local text = '' ; local shortoption = ''
+-- BUG ? these text-options seem to get ignored, in Perl and Lua :-(
+				if find(option,'^[Ibir]s?.+$') then  -- text option
+					local s1,s2 = match(option, '^([Ibir]s?)(.+)$')
+					shortoption = s1; text = escape_and_utf2iso(s2);
+				elseif find(option,'^s.+$') then
+					local s1 = match(option, '^s(.+)$')
+					shortoption = 'rs'; text = escape_and_utf2iso(s1);
+				else
+					shortoption = gsub(option, "[,']", "")
+					shortoption = Options['shortoption'] or shortoption
+				end
+				if option_is_above then
+					option = gsub(option, "'$", "")
+				end
+				if Options[option] then
+					local updown = 'below'
+					if option_is_above then updown = 'above' end
+					local opt = Options[option]  -- canonicalise
+					if not opt or opt == '' then
+					elseif opt == 'turn' then
+						ornaments[#ornaments+1] = '<turn/>'
+					elseif opt == 'mordent' then
+						ornaments[#ornaments+1] = '<mordent/>'
+					elseif opt == 'dot' then
+						is_staccato = true
+						articulations[#articulations+1] =
+						  '<staccato placement="'..updown..'"/>'
+					elseif opt == 'emphasis' then
+						is_emphasis = true
+						articulations[#articulations+1] =
+						  '<accent placement="'..updown..'"/>'
+					elseif opt == 'tenuto' then
+						articulations[#articulations+1] =
+						  '<tenuto placement="'..updown..'"/>'
+					elseif find(opt,'^tr') then
+						ornaments[#ornaments+1] =
+						  '<trill-mark placement="'..updown..'"/>'
+					end
+				elseif option == 'blank' or option == '' then  -- 2.9c
+				elseif find(option,'/^gs%d') then  -- 3.1y
+					-- BUG: what about -gs ?
+					-- See technical in ~/musicxml/musicxml3/note.dtd
+					-- but guitar-strings are not printed like violin-strings!
+				elseif string.len(text) > 0.5 then  -- text option
+					local font     = RegularFont
+					local fontsize = TextSize * StvHgt
+					if find(shortoption,'^I') then
+						if (XmlDynamics['text']) then
+							 notations[#notations+1] =
+							  '<dynamics><'..text..'/></dynamics>'
+						end
+						font = BoldItalicFont
+					elseif find(shortoption,'^i') then
+						font = ItalicFont
+					elseif find(shortoption,'^b') then
+						font = BoldFont
+					end
+					if find(shortoption,'s') then
+						fontsize = fontsize * SmallFontRatio
+					end
+				elseif shortoption == 'fermata' then
+					local updown = 'inverted'
+					if option_is_above then updown = 'upright' end
+					notations[#notations+1] = '<fermata type="'..updown..'"/>'
+				elseif find(option,'^cre') then
+				elseif find(option,'^dim') then
+				elseif option == '*' then
+				elseif option == 'P' then
+				else
+					warn_ln('unrecognised option '..option)
+				end
+			end
+			local note_attributes = ''
+			local release = 0   -- legato = <note release="-ticks">
+			local legato = Stave2legato[Istave] or DefaultLegato
+			if is_staccato then legato = legato * 0.55 end
+			if CurrentPulse>1 and not find(CurrentPulseText,'-s$') then
+			 	 release = round((legato-1.0) * TPC)
+			else release = round((legato-1.0) * CurrentPulse * TPC)
+			end
+			if math.abs(release)>1 and not noteref['starttie'] then
+				note_attributes = note_attributes..' release="'..release..'"'
+			end
+			local vol = current_volume()
+			if is_emphasis then vol=vol+10 ; if vol>127 then vol=127 end end
+			local vol = round(1.1111*vol)
+			note_attributes=note_attributes..' dynamics="'..tostring(vol)..'"'
+			for i,cha in ipairs(Stave2channels[Istave]) do   -- 3.1v
+				XmlCache[#XmlCache+1] = t3..'<note'..note_attributes..'>'
+				if find(CurrentPulseText,'-s$') then
+					XmlCache[#XmlCache+1] = t4..'<grace/>'
+				end
+				if i_note>0.5 then XmlCache[#XmlCache+1] = t4..'<chord/>' end
+				local xml_pitch =
+				  xml_pitch(noteref['pitch'], noteref['accidental'])
+				XmlCache[#XmlCache+1] = t4..xml_pitch
+				if not find(CurrentPulseText,'-s$') then
+					-- no duration on grace notes
+					local duration = round(CurrentPulse * TPC)
+					XmlCache[#XmlCache+1] =
+					  t4..'<duration>'..tostring(duration)..'</duration>'
+					if i_note < 0.5 then Xml['backup'] =
+						tostring(tonumber(Xml['backup']) + duration)
+					end
+				end
+				if noteref['endtie'] then
+					XmlCache[#XmlCache+1] = t4..'<tie type="stop"/>'
+				end
+				if noteref['starttie'] then
+					XmlCache[#XmlCache+1] = t4..'<tie type="start"/>'
+				end
+				-- fermata is a muscript option, and an xml notation
+				local cha_p1 = cha+1
+				XmlCache[#XmlCache+1] =
+				  t4..'<instrument id="cha'..tostring(cha_p1)..'"/>'
+				i_note = i_note + 1
+				XmlCache[#XmlCache+1] =
+				  t4..'<voice>'..Xml['voice']..'</voice>'
+				XmlCache[#XmlCache+1] = t4..XmlDuration[CurrentPulseText]
+				if noteref['accidental'] then  -- must be after <type>
+					local acc = XmlAccidental[noteref['accidental']]
+					if acc then XmlCache[#XmlCache+1] =
+					   t4..'<accidental>'..acc..'</accidental>'
+					end
+				end
+				if find(CurrentPulseText,'3$') then  -- triplet 
+					XmlCache[#XmlCache+1] = t4 ..
+					  '<time-modification><actual-notes>3</actual-notes>' ..
+					  '<normal-notes>2</normal-notes></time-modification>'
+				end
+				local stemup = 'down'
+				if is_stemup(noteref) then stemup = 'up' end
+				XmlCache[#XmlCache+1] = t4..'<stem>'..stemup..'</stem>'
+				XmlCache[#XmlCache+1] =
+				  t4..'<staff>'..tostring(Istave)..'</staff>'
+				local nbeams = 1
+				if     find(CurrentPulseText,'^smq') then nbeams = 2
+				elseif find(CurrentPulseText,'^dsq') then nbeams = 3
+				elseif find(CurrentPulseText,'^hds') then nbeams = 4
+				end
+				if noteref['startbeam'] then
+					for ibeam =1,nbeams do XmlCache[#XmlCache+1] = t4..
+					  '<beam number="'..tostring(ibeam)..'">begin</beam>'
+					end
+					if stemup then StartBeamUp = true
+					else     StartBeamDown = true
+					end
+				elseif noteref['endbeam'] then
+					for ibeam =1,nbeams do XmlCache[#XmlCache+1] = t4..
+					  '<beam number="'..tostring(ibeam)..'">end</beam>'
+					end
+					if stemup then StartBeamUp = false
+					else StartBeamDown = false
+					end
+				elseif StartBeamUp and stemup then
+					for ibeam =1,nbeams do XmlCache[#XmlCache+1] = t4..
+					  '<beam number="'..tostring(ibeam)..'">continue</beam>'
+					end
+				elseif StartBeamDown and not stemup then
+					for ibeam =1,nbeams do XmlCache[#XmlCache+1] = t4..
+					  '<beam number="'..tostring(ibeam)..'">continue</beam>'
+					end
+				end
+				if #notations>0.5 or #ornaments>0.5 or #articulations>0.5 then
+					XmlCache[#XmlCache+1] = t4..'<notations>'
+					for i,v in ipairs(notations) do
+						XmlCache[#XmlCache+1] = t5..v
+					end
+					if #ornaments>0.5 then
+						XmlCache[#XmlCache+1] = t5..'<ornaments>'..
+						  table.concat(ornaments, ' ')..'</ornaments>'
+					end
+					if #articulations>0.5 then
+						XmlCache[#XmlCache+1] = t5..'<articulations>'..
+						  table.concat(articulations, ' ')..'</articulations>'
+					end
+					XmlCache[#XmlCache+1] = t4..'</notations>'
+				end
+				XmlCache[#XmlCache+1] = t3..'</note>'
+			end
+		elseif find(symbol,'^rest') then
+			-- must handle fermata
+			local clef = Stave2clef[Istave]
+			local move = 0;  local display = ''
+			if find(symbol, "'") then
+				move = string.len(match(symbol, "('+)"))
+			elseif find(symbol, ",") then
+				move = 0 - string.len(match(symbol, "(,+)"))
+			end
+			if move > 0.5 then
+				local line = 4*move + Midline[clef]
+				local octave = tostring(math.floor(0.1 + line/7))
+				local step = Line2step[tostring(line%7)]
+				display = '<display-step>'..step..'</display-step>'..
+				  '<display-octave>'..octave..'</display-octave>'
+			end
+			XmlCache[#XmlCache+1] =
+			  t3..'<note>\n'..t4..'<rest>'..display..'</rest>'
+			local duration = tostring(round(CurrentPulse * TPC))
+			XmlCache[#XmlCache+1] = t4..'<duration>'..duration..'</duration>'
+			XmlCache[#XmlCache+1] = t4..'<voice>'..Xml['voice']..'</voice>'
+			Xml['backup'] = tostring(tonumber(Xml['backup']) + duration)
+			XmlCache[#XmlCache+1] = t4..XmlDuration[CurrentPulseText]
+			XmlCache[#XmlCache+1] = t4..'<staff>'..tostring(Istave)..'</staff>'
+			XmlCache[#XmlCache+1] = t3..'</note>'
+		elseif find(symbol,'^blank') then
+			local duration = round(CurrentPulse * TPC)
+			Xml['backup'] = tostring(tonumber(Xml['backup'] + duration))
+			XmlCache[#XmlCache+1] = t3..'<forward><duration>'..
+			  tostring(duration)..'</duration></forward>'
+		end
+	end
+end
+
+function xml_clef_attribute (clef)
+	local sign = 'C'
+	local line = '3'
+	if     find(clef,'^treble') then sign = 'G' line = '2'
+	elseif find(clef,'^bass')   then sign = 'F' line = '4'
+	elseif find(clef,'^tenor')  then line = '4'
+	end
+	local clef_octave_change = ''
+	if     find(clef,'8vab$')   then
+		clef_octave_change = '<clef-octave-change>-1</clef-octave-change>'
+	elseif find(clef,'8va$')    then
+		clef_octave_change = '<clef-octave-change>1</clef-octave-change>'
+	end
+	return '<clef number="'..tostring(Istave)..'"><sign>'..sign..
+	  '</sign><line>'..line..'</line>'..clef_octave_change..'</clef>'
+end
+
+
+--------------------- Variable stuff -------------------------
+
+local substitute, set_var   --  see PiL p.58
+
+----------------- sequence-generator infrastructure --------------
+
+--A = {} ; Var = ''  -- to be used in load() so they must be global 
+function cycle (list)  -- likewise, the generator functions must be global
+	local i = 0; local n = #list
+	return function (newlist)
+		if newlist then list=newlist; n = #list end  -- but i remains.
+		local x = list[1+i] ;  i = (i+1) % n ;  return x
+	end
+end
+function leibnitz (list)   -- NB 1st arg is n !
+	local i = 0
+	local n = tonumber(table.remove(list,1))
+	if n < 2 then
+		warn_ln("leibnitz 1st arg N must be at least 2") ; return ''
+	end
+	if not list then list = {} end
+	return function (newlist)
+		if newlist and #newlist==1 and find(newlist[1],'^%?.*%?') then
+			local s1 = match(newlist[1], '^%?(.*)%?')
+			list = split(s1,'%s*:%s*') ; n = #list
+		elseif newlist then list=newlist; n = #list end -- but i remains
+		local icopy = i
+		local j = 0
+		while icopy > 0.5 do   -- sum the base-n "digits"
+			j = j + icopy % n
+			icopy = round((icopy - icopy%n) / n)
+		end
+		i = i + 1
+		return list[1+j]
+	end
+end
+function morse_thue (list)
+	local i = 0; local n = #list
+	if not list then list = {} end
+	return function (newlist)
+		if newlist and #newlist==1 and find(newlist[1],'^%?.*%?') then
+			local s1 = match(newlist[1], '^%?(.*)%?')
+	 	   list = split(s1,'%s*:%s*') ; n = #list
+		elseif newlist then list=newlist; n = #list end -- but i remains.
+		local icopy = i
+		local j = 0
+		while icopy > 0.5 do   -- sum the base-n "digits"
+			j = j + icopy % n
+			icopy = round((icopy - icopy%n) / n)
+		end
+		i = i + 1
+		return list[1 + j%n]
+	end
+end
+function rabbit (list) -- 3.1e
+	local i = 0; local n = #list
+	return function (newlist)
+		if newlist then list=newlist; n = #list; end  -- but i remains.
+		if i >= #RabbitSequence then
+			local n_ors = #OldRabbitSequence -- really only need its size...
+			local n_rs  = #RabbitSequence
+			for i = 1,n_ors do
+				table.insert(RabbitSequence, OldRabbitSequence[i])
+			end
+			for i = 1, n_rs-n_ors do
+				table.insert(OldRabbitSequence, RabbitSequence[i])
+			end
+		end
+		local x = list[ 1 + RabbitSequence[i+1] ]
+		i = i + 1
+		return x
+	end
+end
+function random (list) -- 3.1k
+	local n = #list
+	return function (newlist)
+		if newlist then list=newlist; n = #list end
+		local x = list[math.random(n)]
+		return x
+	end
+end
+function aaba (list) -- 3.1k
+	local i = 0; local n = #list
+	return function (newlist)
+		if newlist then list=newlist; n = #list end  -- but i remains.
+		if (i >= #AabaSequence) then
+			local n = #AabaSequence
+			for i = 1,n do table.insert(AabaSequence,  AabaSequence[i])  end
+			for i = 1,n do table.insert(AabaSequence, 1-AabaSequence[i]) end
+			for i = 1,n do table.insert(AabaSequence,  AabaSequence[i])  end
+		end
+		local x = list[1+ AabaSequence[1+i] ]
+		i = i + 1
+		return x
+	end
+end
+
+function substitute (text, infinite_depth)
+	-- It takes a single line as arg, returns a list of perhaps more than 1
+	if type(text) == 'table' then die "substitute called with an table\n" end
+	if find(text,VariableFindRE) then die("substitute called on ",text) end
+	while find(text,VariableGetRE_f) do  -- 3.0h
+		local var = match(text,VariableGetRE_m)
+		local val = Vars[var]
+		if type(val) == 'function' then
+			text=gsub(text,VariableGetRE_f, function() return val() end)
+-- warn('substitute: text=',text)
+		elseif type(val) == 'table' then  -- multiline, stored as arrayref
+			local raw_lines = {} ;
+			for i,v in ipairs(val) do raw_lines[i]=v end
+			local subst_lines = {}
+			while #raw_lines > 0.5 do
+				local raw_line = table.remove(raw_lines, 1)
+-- warn('substitute: raw_line=',dump(raw_line))
+				if not raw_line or raw_line=='' then break end
+				if find(raw_line, VariableSetRE_f) then
+					table.insert(raw_lines, 1, raw_line)
+					local n = set_var(raw_lines, 1, infinite_depth)
+					for i = n,#raw_lines do raw_lines[i-n+1]=raw_lines[i] end
+					raw_lines[#raw_lines-n+2] = nil
+				else
+					for i,v in ipairs(substitute(raw_line,infinite_depth)) do
+						subst_lines[#subst_lines+1] = v
+					end
+				end
+			end
+			local subst_str = table.concat(subst_lines, "\n").."\n"
+			text = gsub(text, VariableGetRE_m, subst_str, 1) -- 3.2j
+		elseif not val or #val == 0 then
+			warn_ln("variable ",var," is undefined")
+			text = gsub(text, VariableGetRE_m, '')
+		elseif val then
+-- warn('substitute: var='..var..'  val='..val..'\n')
+			text = gsub(text, '%$'..var, val)
+		end
+	end
+	return split(text,"\n")  -- returns a list, because of multiline vars
+end
+
+function set_var (stackref, i, infinite_depth)
+	-- not always called on Stack!
+	-- needs an i=linenum param, and returns new_linenum
+	local line = stackref[i]
+	local var,equals_sign,val = match(line, VariableSetRE_m)
+	local substitute_now = equals_sign == '=='
+--warn('0.5): substitute_now=',substitute_now,' infinite_depth=',infinite_depth)
+	if val and find(val,'^{%s*#?.*$') then   -- allow comments 3.1b
+		-- loop until closing brace, then set_var; store in %Vars as an arrayref
+		local lines_of_var = {}
+		while i<#stackref do
+			i = i+1
+			local line = stackref[i]
+--warn('0.7) i=',i,' line=',line)
+			while find(line,'\\$') do
+				line = gsub(line,'\\$','')
+				i = i+1
+				line = line .. stackref[i]
+			end
+			line = gsub(line, '^%s+', '', 1)  -- strip leading space
+			if not line or find(line, '^}') then break end
+-- warn('1) i=',i,' line=',line)
+			if not substitute_now then
+				lines_of_var[#lines_of_var+1] = line
+				goto nextline
+			elseif find(line, VariableSetRE_f) then
+-- warn('1.9): substitute_now=',substitute_now,' infinite_depth=',infinite_depth)
+				if substitute_now or
+				  (infinite_depth and find(line,VariableGetRE_f)) then
+--warn('2) about to call set_var  i=',i)
+-- This omitted the next line after $B == $A $A  :-(
+					i = set_var(stackref, i, infinite_depth);
+--  But this looped endlessly  on  $B = $A $A   :-(
+--					i = set_var(stackref, i, infinite_depth) - 1;
+				else
+					warn_ln("set_var: line=",line)
+				end
+			elseif substitute_now or infinite_depth then
+				if find(line, VariableGetRE_f) then
+--warn('3) about to call substitute i=',i,' line=',line)
+					local a = substitute(line,infinite_depth)
+--warn('3.5)  substitute returned i=',i,' a=',dump(a))
+					for j,v in ipairs(a) do lines_of_var[#lines_of_var+1]=v end
+				else
+--warn('3.6)  pushing onto lines_of_var[], line=',dump(line))
+					lines_of_var[#lines_of_var+1] = line
+				end
+			end
+			::nextline::
+		end
+		Vars[var] = lines_of_var
+	elseif val and find(val, '^cycle%?%s*.*%S%s*%?' )      then
+		-- we write these cases out separately we don't need to load() ...
+		-- but we could save some lines with a String2function table...
+		local s2 = match(val, '^cycle%?%s*(.*%S)%s*%?')
+		local rhs = { s2 }
+		if substitute_now or infinite_depth then
+--warn('4) about to call substitute line=',line)
+			rhs = substitute(s2, infinite_depth)  -- 3.1i
+		end
+		local a = split(rhs[1], '%s*:%s*')
+		if #a>0.5 then   Vars[var] = cycle(a)
+		else warn_ln("empty argument list in ",val)
+		end
+	elseif val and (find(val, '^morse_thue%?%s*.*%S%s*%?' )  or
+	                find(val, '^thue_morse%?%s*.*%S%s*%?' )) then
+		local s2 = match(val, '^[morsethu_]+%?%s*(.*%S)%s*%?')
+		local rhs = { s2 }
+		if substitute_now or infinite_depth then
+			rhs = substitute(s2, infinite_depth)  -- 3.1i
+		end
+		local a = split(rhs[1], '%s*:%s*')
+		if #a>0.5 then   Vars[var] = morse_thue(a)
+		else warn_ln("empty argument list in ",val)
+		end
+	elseif val and find(val, '^leibnitz%?%s*.*%S%s*%?' )   then
+		local s2 = match(val, '^leibnitz%?%s*(.*%S)%s*%?')
+		local rhs = { s2 }
+		if substitute_now or infinite_depth then
+			rhs = substitute(s2, infinite_depth)  -- 3.1i
+		end
+		local a = split(rhs[1], '%s*:%s*')
+		if #a>0.5 then   Vars[var] = leibnitz(a)
+		else warn_ln("empty argument list in ",val)
+		end
+	elseif val and (find(val, '^rabbit%?%s*.*%S%s*%?' )      or
+	                find(val, '^fibonacci%?%s*.*%S%s*%?' ))  then
+		local s2 = match(val, '^[rabitfonac]+%?%s*(.*%S)%s*%?')
+		local rhs = { s2 }
+		if substitute_now or infinite_depth then
+			rhs = substitute(s2, infinite_depth)  -- 3.1i
+		end
+		local a = split(rhs[1], '%s*:%s*')
+		if #a>0.5 then   Vars[var] = rabbit(a)
+		else warn_ln("empty argument list in ",val)
+		end
+	elseif val and find(val, '^random%?%s*.*%S%s*%?' )     then
+		local s2 = match(val, '^random%?%s*(.*%S)%s*%?')
+		local rhs = { s2 }
+		if substitute_now or infinite_depth then
+			rhs = substitute(s2, infinite_depth)  -- 3.1i
+		end
+		local a = split(rhs[1], '%s*:%s*')
+		if #a>0.5 then   Vars[var] = random(a)
+		else warn_ln("empty argument list in ",val)
+		end
+	elseif val and find(val, '^aaba%?%s*.*%S%s*%?' )       then
+		local s2 = match(val, '^aaba%?%s*(.*%S)%s*%?')
+		local rhs = { s2 }
+		if substitute_now or infinite_depth then
+			rhs = substitute(s2, infinite_depth)  -- 3.1i
+		end
+		local a = split(rhs[1], '%s*:%s*')
+		if #a>0.5 then   Vars[var] = aaba(a)
+		else warn_ln("empty argument list in ",val)
+		end
+	else
+		if substitute_now or infinite_depth then
+			local lines = {}
+			-- the arrayref logic is here, not in substitute()
+			if type(val) == 'table' then
+				local j = 1 ; while j <= #val do
+					local line = val[j]
+					-- one of those lines might involve a variable setting...
+					if find(line, VariableSetRE_f) then
+--warn('5) about to call set_var')
+						j = set_var(stackref, j, infinite_depth)
+					elseif find(line, '^}') then j=j+1 ; break
+					else
+						local a =  substitute(line, false)
+--warn('6) substitute line=',line,' returned a=',dump(a))
+						for k,v in ipairs(a) do lines[#lines+1] = v end
+						j = j + #a
+					end
+				end
+			else
+				if find(val, VariableSetRE_f) then
+--					table.insert(stackref, i, val)
+					i = set_var(stackref, i, infinite_depth);
+				elseif find(val, VariableGetRE_f) then
+--warn('7) about to call substitute val=',val)
+					lines = substitute(val, false)
+--warn('8)    substitute returned lines=',dump(lines))
+					i = i + #lines -1   -- XXX
+				else
+					lines = { val }
+				end
+			end
+--warn('9) i=',i,' lines=',dump(lines))
+			if    #lines == 1 then Vars[var] = lines[1] -- scalar
+			elseif #lines > 1 then Vars[var] = lines    -- table, multiline
+			end
+--warn('10) i=',i,' Vars=',dump(Vars))
+		else
+			if var and val then Vars[var] = val end
+--warn('11) i=',i,' Vars=',dump(Vars))
+		end
+	end
+	return i
+end
+
+local function set_array (base, digit1, digit2, equals, values)  -- 3.1m
+	-- 20130305 XXX should we just expand and let set_var take care of it ?
+	-- or should we impose a no-frills, end-of-line constraint ?
+	digit1 = tonumber(digit1) ; digit2 = tonumber(digit2) 
+	if not digit1 or not digit2 or digit1 >= digit2 then
+		warn_ln(digit1,'-',digit2,' is not a valid range') ; return;
+	end
+	local n = digit2 - digit1 + 1
+	local vals = split(values, '%s*:%s*')
+	if n > #vals then
+		vals = split(values, '%s+')
+		if n > #vals then
+			warn_ln("can't see ",n,' variables in "',values,'"') ; return
+		end
+	end
+	local j = 1
+	for i = digit1,digit2 do Vars[base..tostring(i)]=vals[j] ; j=j+1 end
+end
+
+------------------------ general muscript stuff ------------------------
+
+local function newstave (line)
+	local newstave,remainder = match(line, "^(%d+[,']?)(.*)$")
+	local tmp = gsub(newstave, "[,']", "")
+	Istave = tonumber(tmp)   -- why not Istave directly ?
+	if not Stave2channels[Istave] then Stave2channels[Istave] = {} end
+	local maxstvhgt = MaxStaveHeight[Isyst] -- for speed ...
+	if not PrePro and not changestave(newstave) then return false end
+	if MIDI then
+		reset_accidentalled(Keysig[Istave])
+	elseif XmlOpt then
+		reset_accidentalled(Keysig[Istave])
+		local t3 = "\t\t\t"
+		-- XXX must use <backup> - using only one <part> = one MIDI track
+		if tonumber(Xml['backup']) > 0 then
+			table.insert(XmlCache,
+			 t3..'<backup><duration>'..Xml['backup']..'</duration></backup>')
+		end
+		Xml['backup'] = 0
+		Xml['voice'] = tonumber(Xml['voice'] or 0) + 1
+		if Istave > tonumber(Xml['staves'] or 0) then
+			Xml['staves']=tostring(Istave)
+		end
+	elseif not PrePro then
+		print_sp('% page',PageNum,'sys',Isyst,' bar',Ibar,' stave',Istave)
+		-- surely all the measurement loop should also be part of this "else" ?
+	end
+	remainder = gsub(remainder, "^%s+", "")
+	remainder = gsub(remainder, "%s+$", "")
+	local array = parse_line(remainder,false)   -- true ?
+	for i,v in ipairs(array) do array[i] = Intl2en[v] or v end
+	-- count up the total beats in this bar, and calculate spacings ...
+	CrosSoFar = 0  -- global
+	local i=1 ; while i <= #array do  -- for all fields
+		local token = array[i]
+		if find(token, '<') then -- begins a set of simultaneous notes
+			token = gsub(token, '<', '')
+			local shortest = 99    -- find the shortest note
+			while true do
+				if find(token, '>') then
+					token = gsub(token, '>', '') ;
+					break
+				end
+				if is_a_note(token) or find(token,'^rest') or
+				  find(token,'^blank') then
+					if CurrentPulse<shortest then shortest=CurrentPulse end
+				elseif Nbeats[token] then  -- it's a smb, min, etc
+					if Nbeats[token]<shortest then shortest=Nbeats[token] end
+					CurrentPulse     = Nbeats[token]
+				end
+				i = i + 1
+				if i>#array then warn_ln("missing >"); break end
+				token = array[i]
+			end
+			CrosSoFar = CrosSoFar + shortest
+			goto nexttoken
+		end
+		if Nbeats[token] then  -- smb, min, cro, qua etc
+			CurrentPulse     = Nbeats[token]
+		elseif token == 'clefspace' then -- should reserve space by xgap hash..
+		elseif is_a_note(token) or find(token,'^rest') or
+		  find(token,'^blank') then
+			-- if note contains "+", should build up xgap hash ...
+			CrosSoFar = CrosSoFar + CurrentPulse
+		end
+		::nexttoken::
+		i = i + 1
+	end
+	-- Now CrosSoFar has the total in the bar.
+	if MIDI then
+		if Epsilon < abs(CrosSoFar) then
+			TicksPerCro = TicksThisBar / CrosSoFar
+		else
+			TicksPerCro = TPC
+		end
+	elseif XmlOpt then
+	else
+		-- The spacing of the bar was specified in Nparts parts
+		-- BUG ! if the "|" line after a "N bars " is omitted, nparts = 0 !!
+		if Nparts[Isyst][Ibar] then
+			CrosPerPart = CrosSoFar / Nparts[Isyst][Ibar]
+		else print_sp(
+			  '% ERROR: no | before stave line, page',PageNum,', sys',Isyst)
+			warn_ln('bad syntax: no | before stave line')
+			Ibar = 1
+			CrosPerPart = 10 -- ugly but legal
+		end
+		-- so what are the corresponding x positions ?
+		-- NB! Xpart[n] is the left end of part n, but Xbar{s,m} is right end
+		-- of bar m !  So Xbar{isyst,0} = LeftHandMargin.
+		-- place the beginning of the bar
+		Xpart[1]=(Xbar[Isyst][Ibar-1] or 0)+SpaceAtBeginningOfBar*maxstvhgt
+		-- there's always a clef at BOL ...
+		if Ibar == 1 then Xpart[1] = Xpart[1] + SpaceForClef*maxstvhgt end
+		-- make a bit of room for start-of-repeat signs
+		if Ibar>1 and bit32.band(BarType[Isyst][Ibar-1],4)>0.5 then
+			Xpart[1] = Xpart[1] + SpaceForStartRepeat * maxstvhgt;
+		elseif Ibar>1 and bit32.band(BarType[Isyst][Ibar-1],1)>0.5 then
+			-- double-bars
+			Xpart[1] = Xpart[1] + 0.3 * SpaceForStartRepeat * maxstvhgt;
+		end
+
+		-- place the end of the bar
+		local ilastpart = 1 + Nparts[Isyst][Ibar]
+		Xpart[ilastpart] = Xbar[Isyst][Ibar] - SpaceAtEndOfBar*maxstvhgt
+		-- leave a bit of room for end-of-repeat signs
+		if bit32.band(BarType[Isyst][Ibar],2) > 0.5 then
+			Xpart[ilastpart] = Xpart[ilastpart] - SpaceForEndRepeat*maxstvhgt
+		end
+	end
+
+	-- OK. Now rescan the string bar, actually writing out the symbols ...
+	CrosSoFar = 0;			-- so far this bar
+	local theresaclef = false
+	local retain_clef = false
+	i = 1   -- back to the first field
+
+	-- first write things that can be at BOL, like clef,keysig,timesig,repeat
+	-- Xml: see attributes.dtd
+	local attributes = {}
+	if XmlOpt and
+	  Xml['current transpose'] ~= Stave2transpose[Istave] then
+		attributes['transpose'] = xml_transpose(Stave2transpose[Istave])
+	end
+	local must_null_the_keysig = false   -- 2.8o
+	if midi_in_stave(array[i]) then i = i + 1 end   -- BUG should be a loop!
+	if is_a_clef(array[i]) then  -- clef
+		local cleftype = array[i]
+		must_null_the_keysig = true  -- 2.8o explicit clef cancels the keysig
+		if MIDI then
+			Accidentalled = {}
+		elseif XmlOpt then
+			if Xml["clef "..tostring(Istave)] ~= cleftype then
+				attributes['clef'] = xml_clef_attribute(cleftype)
+				Xml["clef "..tostring(Istave)] = cleftype
+			end
+		else
+			local x = Xbar[Isyst][Ibar-1] + SpaceLeftOfClef*maxstvhgt
+			if Ibar>1 and bit32.band(BarType[Isyst][Ibar-1],4) > 0.5 then
+				x = x + SpaceForStartRepeat*maxstvhgt
+			elseif Ibar>1 and bit32.band(BarType[Isyst][Ibar-1],1) > 0.5 then
+				x = x + 0.3 * SpaceForStartRepeat*maxstvhgt
+			end
+			printf("%g %g %g %sclef\n",x,Ystv,StvHgt,cleftype)
+			if Ibar > 1 then  -- at BOL, space is already reserved for clef
+				Xpart[1] = Xpart[1] + 0.9 * SpaceForClef*maxstvhgt -- kludge
+				theresaclef = true
+			end
+		end
+		Stave2clef[Istave] = cleftype
+		i = i + 1
+	elseif array[i] == 'clefspace' then
+		if not MIDI then
+			Xpart[1] = Xpart[1] + 0.9*SpaceForClef*maxstvhgt  -- 3.2d ibar==1?
+		end
+		theresaclef = true
+		i = i + 1
+	elseif Ibar == 1 and Stave2clef[Istave] then
+		if not MIDI and not XmlOpt then printf("%g %g %g %sclef",
+			 Xbar[Isyst][Ibar-1] + SpaceLeftOfClef*maxstvhgt,
+			 Ystv, StvHgt, Stave2clef[Istave])
+		end
+		theresaclef = true
+		retain_clef = true
+	end
+
+	if midi_in_stave(array[i]) then i = i + 1 end
+	local xmlkeysig = ''
+	if array[i] and
+	 (find(array[i],'^[1-7][#bn]$') or array[i] == '0') then -- keysig
+		must_null_the_keysig = false   -- 2.8o
+		if MIDI then
+			reset_accidentalled(array[i])
+		elseif XmlOpt then
+			reset_accidentalled(array[i])
+			if Xml["keysig "..tostring(Istave)] ~= array[i] then
+				xmlkeysig = xml_keysig(array[i])
+				Xml["keysig "..tostring(Istave)] = array[i]
+			end
+		else
+			local x = Xbar[Isyst][Ibar-1]
+			if Ibar == 1 or theresaclef then
+				x = x + SpaceForClef*maxstvhgt;
+			else
+				x = x + 0.6*AccidentalDxInKeysig*maxstvhgt
+				if bit32.band(BarType[Isyst][Ibar-1],1) > 0.5 then -- doublebar
+					x = x + 0.3*SpaceForStartRepeat*maxstvhgt
+				end
+				-- echoes code 85 lines above ... XXX why 0.5 ?
+				if Ibar>1 and bit32.band(BarType[Isyst][Ibar-1],4) > 0.5 then
+					x = x + 0.5*SpaceForStartRepeat*maxstvhgt; -- repeat mark
+				end
+			end
+			if array[i] == '0' then  -- 2.8c cancel keysig, back to Cmaj
+				-- XXX if 2 lines on same stave, only the 1st reserves space :-(
+				s1,s2 = match(Keysig[Istave], '^([1-7])([#bn])$')
+				if s2 then
+					ps_keysig('-'..s1, s2, x)
+				else
+					Xpart[1] = Xpart[1] + (Stave2nullkeysigDx[Istave] or 0)
+				end
+			else
+				s1,s2 = match(array[i], '^([1-7])([#bn])$')
+				ps_keysig(s1, s2, x)
+			end
+		end
+		Keysig[Istave] = array[i]
+		i = i + 1
+	elseif Ibar==1 and retain_clef and
+	  find(Keysig[Istave],'^[1-7][#bn]$') then
+		must_null_the_keysig = false   -- 2.8o
+		if not MIDI and not XmlOpt then
+			s1,s2 = match(Keysig[Istave], '^([1-7])([#bn])$')
+			ps_keysig(s1, s2, Xbar[Isyst][Ibar-1] + SpaceForClef*maxstvhgt)
+		end
+	end
+	if must_null_the_keysig then Keysig[Istave] = '' end   -- 2.8o
+
+	-- if new timesig, print it and adjust beginning of bar, xpart{1}
+	-- BUG: should actually adjust all the bars in the whole line ...
+	if midi_in_stave(array[i]) then i = i + 1 end
+	if array[i] and find(array[i], '%d+/%d+') then -- new timesig
+		if MIDI then
+		elseif XmlOpt then
+			local k = "timesig "..tostring(Istave)
+			if not Xml[k] or Xml[k] ~= array[i] then
+				attributes['time'] = xml_time_attribute(array[i])
+				Xml[k] = array[i]
+			end
+		else
+			local topnum, botnum = table.unpack(split(array[i], '/', 2))
+			printf("%g %g %g (%s) (%s) timesig",
+				Xpart[1] - 0.5*SpaceAtBeginningOfBar*maxstvhgt,
+				Ystv, StvHgt, topnum, botnum)
+			if tonumber(topnum) > 9 or tonumber(botnum) > 9 then  -- 2.9z
+				Xpart[1] = Xpart[1] + SpaceForFatTimeSig * maxstvhgt
+			else
+				Xpart[1] = Xpart[1] + SpaceForTimeSig * maxstvhgt
+			end
+		end
+		i = i + 1
+	end
+	if not MIDI and not XmlOpt then
+		if Ibar==1 and bit32.band(BarType[Isyst][0],4)>0.5 then --repeat at BOL
+			ps_repeatmark(Isyst, Istave, Xpart[1]-SpaceForStartRepeat*StvHgt)
+			Xpart[1] = Xpart[1] + SpaceForStartRepeat * maxstvhgt
+		end
+		-- calculate the length of bar available for music, = end - beginning
+		dxbar = Xpart[1 + Nparts[Isyst][Ibar]] - Xpart[1]
+		-- and thus place the various parts within the bar
+		for ipart = 2, Nparts[Isyst][Ibar] do
+			Xpart[ipart] = Xpart[ipart-1] +
+			  dxbar * PartShare[Ibar][ipart-1] / Proportion[Ibar]
+		end
+	elseif XmlOpt then
+		if xmlkeysig ~= '' then
+			attributes['key'] = xmlkeysig
+		else  -- musicxml2ly insists on a key even when there isn't one :-(
+			if not Xml["keysig "..tostring(Istave)] then  -- XXX 2.5u
+				attributes['key'] = xml_keysig('')
+				Xml["keysig "..tostring(Istave)] = 'Cmaj'
+			end
+		end
+		if not Xml['specified_divisions'] then
+			attributes['divisions'] =
+			  "<divisions>"..tostring(TPC).."</divisions>"
+			Xml['specified_divisions'] = true
+		end
+		if not is_empty(attributes) then
+			XmlCache[#XmlCache+1] = attributes
+		end
+	end
+	while i <= #array do
+		symbol = array[i]
+		if symbol == '' then break end
+		if find(symbol, '<') then   -- 2.7w
+			symbol = gsub(symbol, '<', '')
+			-- start of bracketed simultaneous notes
+			-- extract list of simultaneous things to pass to &ps_event ...
+			local things = {}; local is_end_of_bracket = false
+			while true do
+				if find(array[i],'>') then
+					is_end_of_bracket=true
+					array[i] = gsub(array[i], '>', '')
+				end
+				table.insert(things, array[i])
+				if is_end_of_bracket then is_end_of_bracket=false; break end
+				i = i + 1
+				if i > #array then break end
+			end
+			if      MIDI  then midi_event(things)
+			elseif XmlOpt then xml_event(things)
+			else               ps_event(things)
+			end
+			goto nextsymbol
+		end
+		if Nbeats[symbol] then	-- it's smq, min, cro, qua etc
+			CurrentPulse = Nbeats[symbol]
+			CurrentPulseText = symbol
+		elseif is_a_clef(symbol) then -- clef
+			if not MIDI and not XmlOpt then
+				-- 2.8m If last symbol in bar, omit SpaceRightOfClef
+				local x = ps_beat2x(CrosSoFar,CrosPerPart)
+				if i == #array then x = x - 0.6*SpaceForClef*StvHgt
+				-- else x=x- SpaceRightOfClef*StvHgt usually inconvenient
+				else x = x - 0.7*SpaceForClef*StvHgt  -- 3.2j
+				end
+				printf("%g %g %g %sclef",x,Ystv,StvHgt,symbol)
+			end
+			Stave2clef[Istave] = symbol
+		elseif symbol == 'clefspace' then
+		elseif symbol == '|' then  -- 3.2f in-bar barline
+			if not MIDI and not XmlOpt then
+				local x = ps_beat2x(CrosSoFar,CrosPerPart)
+				x = x - 0.8*SpaceRightOfClef*StvHgt
+				printf("%g %g %g %g barline",
+				  x, Ystv, Ystv-StvHgt, StvHgt)
+			end
+		elseif find(symbol, "^=%d+[,']?$") then
+			s1 = match(symbol, "^=(%d+[,']?)$") ; changestave(s1)
+		elseif midi_in_stave(symbol) then   -- ignore it
+		elseif CrosPerPart or MIDI or XmlOpt then -- a note, blank or rest
+			if is_a_note(symbol) or find(symbol,'^rest') or
+	 		  find(symbol,'^blank') then
+				if MIDI       then midi_event(symbol)  -- ?? array?
+				elseif XmlOpt then xml_event({symbol})
+				else                ps_event({symbol})
+				end
+			else
+				warn_ln("not a note: ",symbol)
+			end
+		end
+		::nextsymbol::
+		i = i + 1
+	end
+end
+
+local function interpret_syntax (line)
+	::redo::
+	line = gsub(line, "^%s*(.-)%s*$", "%1") -- strip PiL p.209
+	-- invoked both per input-line, and from each line within a multiline var
+	if PrePro then print(line); return end
+	local s1, s2, s3, s4
+	s1 = match(line, '^=%s*(.+)$') ; if s1 then
+		if not MIDI or not Midi_off then newstave(s1) end ; return
+	end
+	s1,s2 = match(line, '^boundingbox%s+(%d+)%s+(%d+)$') ; if s2 then
+		boundingbox(s1,s2); return
+	end
+	if not MIDI and not XmlOpt and not PS_prologAlready then ps_prolog() end
+	s1,s2 = match(line, '^([1-9][0-9]*)%s+systems%s+(.*)$')
+	if s2 then systems(s1,s2); return end
+	s1 = match(line,'^midi%s*(.*)$') ; if s1 then   -- 3.1f
+		if      s1 == 'on'  then Midi_off = false
+		elseif  s1 == 'off' then Midi_off = true
+		elseif not Midi_off then midi_global(s1)   -- 2.9l
+		end
+		return
+	end
+	if MIDI and Midi_off then return end
+	if XmlOpt and not Xml['header finished'] then
+		-- for xml, the header lines must be consecutive ...
+		if not xml_header(line) then
+			Xml['header finished'] = true; goto redo  -- don't understand this
+		end
+	end
+	local ps = not MIDI and not XmlOpt -- either PS or EPS
+	s1 = match(line,'^rightfoot%s(.*)$')
+	if s1 then if ps then ps_rightfoot(s1) end; return end
+	s1 = match(line,'^leftfoot%s(.*)$')
+	if s1 then if ps then ps_leftfoot(s1) end;  return end
+	s1 = match(line, '^innerhead%s(.*)$')
+	if s1 then if ps then ps_innerhead(s1) end; return end
+	s1 = match(line, '^lefthead%s(.*)$')
+	if s1 then if ps then ps_lefthead(s1) end;  return end
+	s1 = match(line, '^righthead%s(.*)$')
+	if s1 then if ps then ps_righthead(s1) end; return end
+	s1 = match(line, '^pagenum(.*)$')
+	if s1 then if ps then ps_pagenum(s1) end;   return end
+	if match(line, '^title') then title(line) ; return end
+	s1 = match(line, '^%%%s*(.*)'); if s1 then comment(s1); return end
+	if find(line,'^#') or find(line,'^muscript%s')
+	  or find(line,'^EOT$') then return end
+	s1 = match(line, '^/%s*$')
+	if s1 then newsystem(line) ; return end
+	s1,s2 =  match(line, '^/%s*([1-9][0-9]*)%s*bars?%s*(.*)$')
+	if s2 then newsystem('/'); bars(s1,s2); Ibar=0; return end -- on same line
+	s1,s2 =  match(line, '^([1-9][0-9]*)%s*bars?%s*(.*)$')
+	if s2 then bars(s1,s2); Ibar=0 return end
+	s1,s2 = match(line, '^(|%s*[^=]*)(%s*=%d.*)$') ; if s2 then
+		newbar(gsub(s1, '^|%s*', ''))  -- p.206 bottom
+		newstave(gsub(s2, '^%s*=', ''))
+		return
+	end
+	s1 = match(line, '^(|%s*[^=]*)$')  -- p.206 bottom
+	if s1 then newbar(gsub(s1, '^|%s*', '')) ; return end
+	s1,s2,s3,s4 = match(line,'^([rbiI])([ls]?)(%d?%.?%d*)(%s.*)$')
+	if s4 then
+		if XmlOpt then xml_text(s1,s2,s3,s4) ; return end
+		if MIDI then return end
+		ps_text(s1,s2,s3,s4) ; return
+	end
+	if find(line,'^play%s+.*$') then
+		if  MIDI then
+			midi_play_wav(match(line,'^play%s+(.*)$')) ; return
+		end
+	end
+	warn_ln("not recognised: "..line)   -- 2.9j
+end
+
+
+-- Command-line options ...
+local iarg=1; while arg[iarg] ~= nil do
+	if not find(arg[iarg], '^-[a-z]+') then break end
+	if (arg[iarg] == '-v') then  -- version
+		print ("Muscript "..Version.." "..VersionDate
+		  .." http://www.pjb.com.au/muscript")
+		print [=[
+For home page     see http://www.pjb.com.au/muscript/index.html
+For sample source see http://www.pjb.com.au/muscript/samples]=]
+		os.exit(0)
+	elseif arg[iarg] == '-letter' or arg[iarg] == '-us'  then
+		PageSize='letter';
+	elseif arg[iarg] == '-a4'     then
+		PageSize = 'a4';
+	elseif arg[iarg] == '-auto'   then
+		PageSize = 'auto';
+	elseif arg[iarg] == '-b'      then
+		MidiBarlines = true
+	elseif arg[iarg] == '-compromise' then
+		PageSize = 'compromise'
+	elseif arg[iarg] == '-s'     then
+		Strip  = true
+	elseif arg[iarg] == '-p'      then
+		ps_prolog()
+		os.exit(0)
+	elseif arg[iarg] == '-pp'     then
+		PrePro = true
+		XmlOpt    = false
+		MIDI   = nil -- 3.2  but not Midi is destructive! e.g. the #P lines
+		Strip  = true
+		Quiet  = true
+	elseif arg[iarg] == '-q'      then
+		Quiet  = true
+	elseif arg[iarg] == '-xml'    then
+		XmlOpt    = true
+		MIDI   = nil
+		Quiet  = true
+	elseif arg[iarg] == '-midi'   then
+		XmlOpt    = false
+		Quiet  = true
+		MIDI = require 'MIDI'
+		if not MIDI then
+			die("you'll need to install the MIDI module from luarocks");
+		end
+	elseif find(arg[iarg], '^-') then
+		print [=[
+Usage: muscript [filenames]  # converts filenames to PostScript
+       muscript -a4          # forces A4 output (default)
+       muscript -us          # forces US Letter output
+       muscript -compromise  # forces A4 width and Letter height
+       muscript -auto        # Autodetects PageSize of US Letter printers
+       muscript -s           # Strips off the PS prolog (for concatenating)
+       muscript -p           # just outputs the PS Prolog
+       muscript -q           # Quiet
+       muscript -midi        # converts to MIDI
+       muscript -xml         # converts to MusicXML
+       muscript -pp          # PreProcessor only (expands variables)
+       muscript -v           # prints Version information
+       muscript -h           # prints this Helpful message
+For home page see http://www.pjb.com.au/muscript/index.html
+For sample source see http://www.pjb.com.au/muscript/samples/
+For sample output see http://www.pjb.com.au/mus/comp.html]=]
+		os.exit(0)
+	else
+		break
+	end
+	iarg = iarg + 1
+end
+local Filenames = {}
+while iarg <= #arg do Filenames[#Filenames+1] = arg[iarg]; iarg = iarg+1 end
+if #Filenames == 0 then Filenames[1] = '-' end
+
+initialise()
+
+local Stack = {}   -- slurp onto the Stack.
+for i,file in ipairs(Filenames) do
+	if file == '-' then
+		for line in io.lines() do Stack[#Stack+1] = line end
+	else
+		local f,msg = io.open(file, 'r')
+		if not f then warn(msg) else  -- alas, directories pass the test :-(
+			io.close(f)
+			for line in io.lines(file, '*l') do Stack[#Stack+1] = line end
+		end
+	end
+end
+if #Stack == 0 then os.exit(1) end
+
+while LineNum < #Stack do  -- the main loop through the input-file
+	LineNum = LineNum + 1
+	local line = Stack[LineNum]
+	while find(line, '\\$') do
+		LineNum = LineNum + 1
+		line = gsub(line, '\\$', '') .. Stack[LineNum]
+	end
+	if find(line, '^%s*$') then goto nextline end
+	if find(line, '^%s*#P') then
+		if not PrePro then   -- 3.2c keep #P and expand them
+			if MIDI then goto nextline end
+			line = gsub(line, '^%s*#P', '')   -- 3.1h 3.2c
+		end
+	elseif find(line, '^%s*#M') then  -- 3.2c keep #M and expand them
+		if not PrePro then
+			if not MIDI then goto nextline end
+			line = gsub(line, '^%s*#M', '')
+		end
+	elseif find(line, '^%s*#')  then  -- 3.2c
+		if PrePro then print(line) end
+		goto nextline
+	end
+	if find(line, '^%s*%%') then      -- 3.1c 
+		interpret_syntax(line)
+		goto nextline
+	end
+	if find(line, VariableFindRE) then -- 3.0g
+		LineNum = set_var(Stack, LineNum, false)
+		goto nextline
+	end
+	local s1,s2,s3,s4,s5 = match(line, VarArraySetRE) ; if s1 then
+		set_array(s1,s2,s3,s4,s5)
+		goto nextline
+	end
+	local lines = substitute(line,true)   -- now here in mainloop
+	for i,subline in ipairs(lines) do
+		if match(subline, '^%s*$') then goto nextsubline end
+		if match(subline, VariableFindRE) then
+			die("a $VAR= line remains in the text:\n"..line.."\n")
+		else
+			interpret_syntax(subline)
+		end
+		::nextsubline::
+	end
+	::nextline::
+end
+
+if MIDI then
+	midi_write()
+elseif XmlOpt then
+	--io.stdout:write('x')
+	xml_print_cache()
+	--io.stdout:write('y')
+	print "\t\t</measure>\n\t</part>\n</score-partwise>";
+elseif not PrePro then
+		ps_finish_ties()	-- put in any unfinished ties ... 2.7j
+	print "pgsave restore\nshowpage\n%%EOF"   -- XXX shouldn't showpage in EPS
+	print_tty("\n")
+end
+os.exit(0)
+
+
+--[==[
+-- ------------------------ MIDI stuff -------------------------------
+
+local function midi_x2ticks (crossofar,crosperpart)  -- 2.9c
+	-- called by ps_text etc ?! but will need all the xpart stuff
+	local ipart = 1 + int(crossofar/crosperpart - Epsilon);
+	return (Xpart[ipart] + (Xpart[ipart + 1] - Xpart[ipart]) *
+		($crossofar - $crosperpart * ($ipart - 1)) / $crosperpart);
+end
+
+
+]==]
+
+--[=[
+
+=pod
+
+=head1 NAME
+
+muscript - music-typesetting software, written in Perl
+
+=head1 SYNOPSIS
+
+ muscript filename > filename.ps    (generates PostScript)
+ muscript filename | lpr            (direct to the printer)
+ muscript foo | gs -q -sDEVICE=pdfwrite -sOutputFile=foo.pdf - (PDF)
+ muscript -letter foo > foo.ps      (US Letter pagesize)
+ muscript -midi foo > foo.mid       (generates MIDI output)
+ muscript -xml foo > foo.xml        (generates MusicXML output)
+ musicxml2ly foo.xml                (generates LilyPond)
+ muscript -v                        (version information)
+ muscript -h                        (helpful list of calling options)
+
+=head1 DESCRIPTION
+
+Muscript is a language for typesetting music, and a Perl script which
+translates this language either into PostScript, or into Encapsulated
+PostScript, or into MIDI, or into MusicXML, and there is a script
+muscriptps2svg to translate muscript into SVG. Muscript was written
+by Peter Billam to typeset his own compositions and arrangements; it
+started life as an awk script, and was announced to the world in 1996.
+
+To produce MIDI output, you'll also need to install the MIDI-Perl
+module by Sean Burke, see:   http://search.cpan.org/~sburke
+
+The text input syntax is documented in:
+ http://www.pjb.com.au/muscript/index.html
+
+There are some samples available to get you started:
+  http://www.pjb.com.au/muscript/samples/index.html
+
+Some tools exist to manipulate muscript input, or PS or MIDI output:
+ http://www.pjb.com.au/muscript/index.html#tools
+
+=head1 CHANGES
+
+See:  http://www.pjb.com.au/muscript/changes.html
+
+=head1 DOWNLOAD
+
+See:  http://www.pjb.com.au/muscript/index.html#download
+
+=head1 AUTHOR
+
+Peter J Billam   http://www.pjb.com.au/comp/contact.html
+
+=head1 SEE ALSO
+
+ http://www.pjb.com.au/muscript/index.html
+ http://www.pjb.com.au/muscript/samples/index.html
+ http://www.pjb.com.au/midi/index.html
+ http://www.pjb.com.au
+ http://search.cpan.org/~sburke
+
+=cut
+
+]=]

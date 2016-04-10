@@ -1,0 +1,625 @@
+#!/usr/bin/perl
+#########################################################################
+#        This Perl script is Copyright (c) 2007, Peter J Billam         #
+#     c/o P J B Computing, GPO Box 669, Hobart TAS 7001, Australia      #
+#                                                                       #
+# Permission is granted  to any individual or institution to use, copy, #
+# modify or redistribute this software, so long as it is not resold for #
+# profit,  and provided this notice is retained.   Neither Peter Billam #
+# nor  P J B Computing  make any representations  about the suitability #
+# of this software for any purpose. It is provided "as is", without any #
+# express or implied warranty.                http://www.pjb.com.au     #
+#########################################################################
+
+my $Version       = '1.1';  # supresses backslashing of brackets in PS strings
+my $VersionDate   = '31jul2008';
+
+my $PageNum = '1';
+
+while ($ARGV[$[] =~ /^-([a-z])/) {
+	if ($1 eq 'v')      { shift;
+		my $n = $0; $n =~ s{^.*/([^/]+)$}{$1};
+		print "$n version $Version $VersionDate\n";
+		exit 0;
+	} elsif ($1 eq 'p') { shift; $PageNum = shift || '1';
+	} else {
+		print "usage:\n";  my $synopsis = 0;
+		while (<DATA>) {
+			if (/^=head1 SYNOPSIS/)     { $synopsis = 1; next; }
+			if ($synopsis && /^=head1/) { last; }
+			if ($synopsis && /\S/)      { s/^\s*/   /; print $_; next; }
+		}
+		exit 0;
+	}
+}
+
+eval 'require SVG';
+if ($@) {
+	warn "you need to install the SVG Perl module from CPAN\n";
+	die  "see  http://search.cpan.org/search?mode=module&query=SVG\n";
+}
+import SVG;
+
+my %subroutines = map { $_, 1 } qw(
+ blackblob whiteblob breve dot doubledot stave ledger barline notestem
+ quaverstemup quaverstemdown quavertail beam tremolando_qua tremolando_smq
+ tremolando_dsq bracket repeatmark bassclef bass8vaclef bass8vabclef
+ tenorclef altoclef tophalf trebleclef treble8vaclef treble8vabclef
+ timesig sharp natural flat doublesharp demisemiquaverrest semiquaverrest
+ quaverrest crochetrest minimrest smbrest breverest rightshow leftshow
+ centreshow centrexshow slur fermata mordent trill trsharp trflat trnat
+ turn tenuto emphasis segno upbow downbow guitar_string
+);
+my $PageHeight = 842;
+my $PageWidth  = 596;
+my (@eps, $x, $y, $xl, $xr, $yb, $yt);
+my $firstline = <>;
+my $secondline = <>;
+if ($secondline =~ /^%%BoundingBox:?\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/) {
+	$xl=$1; $yb=$2; $PageWidth=$3; $PageHeight=$4;
+	if ($xl > 0 || $yb > 0) {
+		die "$0: BoundingBox should start x=0 y=0 not x=$xl y=$yb\n";
+	}
+	if (!$PageWidth)  {die "$0: BoundingBox must be bigger than zero width\n"; }
+	if (!$PageHeight) {die "$0: BoundingBox must be bigger than zero height\n";}
+}
+
+my $BlackBlobHalfWidth    = 0.17;
+my $BlackBlobHalfHeight   = 0.113;
+my $WhiteBlobHalfWidth    = 0.183;
+my $WhiteBlobHalfHeight   = 0.122;
+my $BeamWidth             = 0.13;
+
+# create an SVG object
+my $svg= SVG->new(width=>$PageWidth,height=>$PageHeight);
+
+# use explicit element constructor to generate a group element
+my $page=$svg->group(
+    id    => 'group_y',
+    style => { stroke=>'black', fill=>'black' },
+	transform =>"translate(0,$PageHeight) scale(1,-1)",
+);
+$page->rectangle(x=>0,y=>0,width=>$PageWidth,height=>$PageHeight,
+ style=>{fill=>'white'});
+
+while (<>) {
+	last if /^%%Page: $PageNum /;
+}
+while (<>) {
+	chop;
+	next if /^%/;
+	last if /^showpage$/;
+	my ($args, $cmd) = /^(.+)\s+(\w+)$/;
+	if ($subroutines{$cmd}) {
+		my @args = ();
+		if ($cmd eq 'timesig' && $args =~ /^([^(]+)\s+\((.+)\)\s+\((.+)\)$/) {
+			@args = ((split " ", $1), $2, $3);
+		} elsif ($args =~ /^([^(]+)\s+\((.+)\)$/) {
+			@args = ((split " ", $1), $2);
+		} else {
+			@args = split " ", $args;
+		}
+		# print "$cmd(", (join ", ", @args), ");\n";
+		eval "$cmd(\@args)";
+	}
+}
+
+print $svg->xmlify;
+
+exit;
+
+# -------------------------------------------------------
+sub blackblob { my ($x, $y, $staveheight) = @_;
+	$page->ellipse(
+    	cx=>$x, cy=>$y,
+    	rx=>$BlackBlobHalfWidth*$staveheight,
+		ry=>$BlackBlobHalfHeight*$staveheight,
+	);
+}
+sub whiteblob { my ($x, $y, $staveheight) = @_;
+    my $width = .014 * $staveheight;
+	my $rx = $WhiteBlobHalfWidth*$staveheight;
+	my $ry = $WhiteBlobHalfHeight*$staveheight;
+	$page->ellipse(
+    	cx=>$x, cy=>$y,  rx=>$rx, ry=>$ry,
+		'fill-opacity'=>0, 'stroke-width'=>$width,
+	);
+	my $deg2rad = 3.14159 / 180;
+	my $x1 = $x + $rx * sin(10*$deg2rad);
+	my $y1 = $y - $ry * cos(10*$deg2rad);
+	my $x2 = $x + $rx * sin(60*$deg2rad);
+	my $y2 = $y + $ry * cos(60*$deg2rad);
+	$page->path(d=>"M$x1,$y1 A$rx $ry 0 0 1 $x2 $y2",
+	 'fill-opacity'=>1, 'stroke-width'=>0);
+	$x1 = $x - $rx * sin(10*$deg2rad);
+	$y1 = $y + $ry * cos(10*$deg2rad);
+	$x2 = $x - $rx * sin(60*$deg2rad);
+	$y2 = $y - $ry * cos(60*$deg2rad);
+	$page->path(d=>"M$x1,$y1 A$rx $ry 0 0 1 $x2 $y2",
+	 'fill-opacity'=>1, 'stroke-width'=>0);
+}
+sub breve { my ($x, $y, $staveheight) = @_;
+	my $scale = $WhiteBlobHalfWidth * $staveheight;
+	my $g = $page->group(transform=>"translate($x,$y) scale($scale,$scale)");
+   	$g->line(x1=>-1.2, y1=>-1,   x2=>-1.2, y2=>1,    'stroke-width'=>0.1);
+   	$g->line(x1=>1.2,  y1=>-1,   x2=>1.2,  y2=>1,    'stroke-width'=>0.1);
+   	$g->line(x1=>-1.2, y1=>-0.4, x2=>1.2,  y2=>-0.4, 'stroke-width'=>0.3);
+   	$g->line(x1=>-1.2, y1=>0.4,  x2=>1.2,  y2=>0.4,  'stroke-width'=>0.3);
+}
+sub dot { my ($x, $y, $staveheight) = @_;
+	$page->circle( cx=>$x, cy=>$y, r=>0.04*$staveheight, 'stroke-width'=>0);
+}
+sub doubledot { my ($x, $y, $staveheight) = @_;
+	dot($x, $y, $staveheight);
+	dot($x+0.2*$staveheight, $y, $staveheight);
+}
+sub stave { my ($x_left, $x_right, $y_topline, $staveheight) = @_;
+    my $width = .015 * $staveheight;
+	foreach (0.0, 0.25, 0.5, 0.75, 1.0) {
+		my $y = $y_topline - $_*$staveheight;
+    	$page->line(x1=>$x_left, y1=>$y,  x2=>$x_right, y2=>$y,
+		 'stroke-width'=>$width);
+	}
+}
+sub ledger { my ($x, $y, $staveheight) = @_;
+    my $width = .015 * $staveheight;
+	my $dx = 0.28 * $staveheight;
+    $page->line(x1=>$x-$dx,y1=>$y, x2=>$x+$dx,y2=>$y, 'stroke-width'=>$width);
+}
+sub barline { my ($x, $y_top, $y_bot, $staveheight) = @_;
+    my $width = .02 * $staveheight;
+    $page->line(x1=>$x,y1=>$y_top, x2=>$x,y2=>$y_bot, 'stroke-width'=>$width);
+}
+sub notestem { my ($x, $y_top, $y_bot, $staveheight) = @_;
+    my $width = .02 * $staveheight;
+    $page->line(x1=>$x,y1=>$y_top, x2=>$x,y2=>$y_bot, 'stroke-width'=>$width);
+}
+sub quaverstemup { my ($x, $y_top, $y_bot, $sh) = @_;
+	notestem($x, $y_top, $y_bot, $sh);
+	my $g = $page->group(transform=>"translate($x,$y_top) scale($sh,$sh)");
+	quavertail($g);
+}
+sub quaverstemdown { my ($x, $y_top, $y_bot, $sh) = @_;
+	notestem($x, $y_top, $y_bot, $sh);
+	my $sx = $sh * 1.2;
+	my $sy = $sh * -0.8;
+	my $g = $page->group(transform=>"translate($x,$y_bot) scale($sx,$sy)");
+	quavertail($g);
+}
+sub quavertail { my ($g) = @_;
+	$g->path(d=>'M0,0 C0,-0.10 0,-0.14 +0.17,-0.33, '
+	 . 'C0.27,-0.40 0.25,-0.70 0.15,-0.80 C0.23,-0.70 0.24,-0.38 0,-0.28',
+	 closed=>'true', 'stroke-width'=>0);
+}
+sub beam { my ($x_left,$y_mid_left, $x_right,$y_mid_right, $staveheight) = @_;
+	my $dy = 0.5 * $BeamWidth * $staveheight;
+	my $points = sprintf "%g,%g %g,%g %g,%g %g,%g",
+	 $x_left,  $y_mid_left+$dy,
+	 $x_right, $y_mid_right+$dy,
+	 $x_right, $y_mid_right-$dy,
+	 $x_left,  $y_mid_left-$dy,
+	 $x_left,  $y_mid_left+$dy;
+    $page->polyline(points=>$points, closed=>'true', 'stroke-width'=>0);
+}
+sub tremolando_qua { my ($x, $y, $staveheight) = @_;
+	my $dy = $BeamWidth * $staveheight; my $dx = 1.6 * $dy;
+	beam($x-$dx, $y-$dy, $x+$dx, $y+$dy, 0.85*$staveheight);
+}
+sub tremolando_smq { my ($x, $y, $staveheight) = @_;
+	my $dy = $BeamWidth * $staveheight; my $dx = 1.6 * $dy;
+	beam($x-$dx, $y,         $x+$dx, $y+1.4*$dy, 0.75*$staveheight);
+	beam($x-$dx, $y-1.4*$dy, $x+$dx, $y,         0.75*$staveheight);
+}
+sub tremolando_dsq { my ($x, $y, $staveheight) = @_;
+	my $dy = 0.7 * $BeamWidth * $staveheight; my $dx = 2.1 * $dy;
+	beam($x-$dx, $y+0.6*$dy, $x+$dx, $y+2.6*$dy, 0.5*$staveheight);
+	beam($x-$dx, $y-$dy,     $x+$dx, $y+$dy,     0.5*$staveheight);
+	beam($x-$dx, $y-2.6*$dy, $x+$dx, $y-0.6*$dy, 0.5*$staveheight);
+}
+sub bracket { my ($x, $y_top, $y_bot, $sh) = @_;
+    $page->line(x1=>$x,y1=>$y_top,x2=>$x,y2=>$y_bot,'stroke-width'=>.125*$sh);
+	my $r = .25 * $sh;
+	my $x2 = $x     + $r*cos(10*3.14159/180);
+	my $y2 = $y_top + $r*(1.0-sin(10*3.14159/180));
+    $page->path(d=>"M$x,$y_top A$r $r 0 0 1 $x2 $y2",
+	 'fill-opacity'=>0, 'stroke-width'=>.03*$sh);
+	$y2 = $y_bot - $r*(1.0-sin(10*3.14159/180));
+    $page->path(d=>"M$x,$y_bot A$r $r 0 0 0 $x2 $y2",
+	 'fill-opacity'=>0, 'stroke-width'=>.03*$sh);
+}
+sub repeatmark { my ($x, $y_top, $staveheight) = @_;
+	my $r = 0.06 * $staveheight;
+	foreach (0.375, 0.625) {
+		my $y = $y_top - $_*$staveheight;
+		$page->circle( cx=>$x, cy=>$y, r=>$r, 'stroke-width'=>0);
+	}
+}
+sub bassclef { my ($x, $y_top, $staveheight) = @_;
+	f_clef($x, $y_top-0.25*$staveheight, $staveheight);
+}
+sub bass8vaclef { my ($x, $y_top, $sh) = @_;
+	leftshow($x-0.15*$sh, $y_top+0.05*$sh, 'Times-Italic', 0.58*$sh, '8');
+	f_clef($x, $y_top-0.25*$sh, $sh);
+}
+sub bass8vabclef { my ($x, $y_top, $sh) = @_;
+	leftshow($x-0.2*$sh, $y_top-1.18*$sh, 'Times-Italic', 0.58*$sh, '8');
+	f_clef($x, $y_top-0.25*$sh, $sh);
+}
+sub f_clef { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->circle( cx=>0.27, cy=>0.15,  r=>0.04, 'stroke-width'=>0 );
+	$g->circle( cx=>0.27, cy=>-0.10, r=>0.04, 'stroke-width'=>0 );
+	$g->circle( cx=>-0.214, cy=>0.0, r=>0.086, 'stroke-width'=>0 );
+	$g->path(d=>'M-.3,0 C-.3,+.18 -.23,+.25 -.07,+.25 L-.07,+.23 '
+	. 'C-.21,+.23 -.26,+.16 -.21,0', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M-.07,+.25 C.11,.25 .18,.11 .18,-.07 L+.07,-.07 '
+	. 'C+.07,.11 0,.23 -.07,+.23', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M+.18,-.07 C+.18,-.25 +.01,-.49 -.29,-.59 L-.3,-.58 '
+	. 'C-.08,-.51 +.07,-.25 +.07,-.07', closed=>'true', 'stroke-width'=>0);
+	$g->circle( cx=>-0.3, cy=>-.58, r=>0.02, 'stroke-width'=>0 );
+}
+sub tenorclef { my ($x, $y_top, $staveheight) = @_;
+	c_clef($x, $y_top-0.25*$staveheight, $staveheight);
+}
+sub altoclef { my ($x, $y_top, $staveheight) = @_;
+	c_clef($x, $y_top-0.5*$staveheight, $staveheight);
+}
+sub c_clef { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-0.18, y1=>0.5, x2=>-0.18, y2=>-0.5, 'stroke-width'=>0.09);
+	$g->line(x1=>-.075, y1=>0.5, x2=>-.075, y2=>-0.5, 'stroke-width'=>0.024);
+	$g->path(d=>'M-.07,0.0 L+.07,.24 L.03,0.0 L.07,-.24',
+	 closed=>'true', 'stroke-width'=>0);
+	tophalf($g);
+	my $bot = $g->group(transform=>"scale(1,-1)");
+	tophalf($bot);
+}
+sub tophalf { my $g = $_[$[];
+	$g->path(d=>'M+.07,.24 C+.07,.08 .13,.08 .16,.08', 'stroke-width'=>0.028);
+	$g->circle( cx=>0.07, cy=>.39, r=>0.055, 'stroke-width'=>0 );
+	$g->path(d=>'M+.015,.39 C+.015,.46 .05,.49 .19,.49 L+.12,.469 '
+	 . 'C+.07,.469 .05,.43 .05,.39', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M+.19,.49 C+.23,.49 .30,.43 .30,.28 '
+	 . 'C+.30,.14 .21,.066 .16,.066 L+.16,.094 '
+	 . 'C+.21,.094 .21,.28 .21,.28 C+.21,.43 .19,.469 .12,.469 ',
+	 closed=>'true', 'stroke-width'=>0);
+}
+sub trebleclef { my ($x, $y_top, $staveheight) = @_;
+	g_clef($x, $y_top-0.75*$staveheight, $staveheight);
+}
+sub treble8vaclef { my ($x, $y_top, $sh) = @_;
+	leftshow($x+0.15*$sh, $y_top+0.3*$sh, 'Times-Italic', 0.58*$sh, '8');
+	g_clef($x, $y_top-0.75*$sh, $sh);
+}
+sub treble8vabclef { my ($x, $y_top, $sh) = @_;
+	leftshow($x+0.05*$sh, $y_top-1.5*$sh, 'Times-Italic', 0.58*$sh, '8');
+	g_clef($x, $y_top-0.75*$sh, $sh);
+}
+sub g_clef { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->circle( cx=>-.17, cy=>-.479, r=>0.086, 'stroke-width'=>0 );
+	$g->path(d=>'M-.256,-.479 C-.256,-.58 -.17,-.643 -.12,-.643 L-.12,-.617 '
+	. 'C-.21,-.622 -.13,-.58 -.21,-.479', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M-.12,-.63 C+.07,-.63 +.11,-.48 +.10,-.4 L-0.05,+.75',
+	 'fill-opacity'=>0, 'stroke-width'=>.026);
+	$g->path(d=>'M-.062,+.751 C-.1,+1.1 +.06,1.18 .10,1.10 L.125,1.12 '
+	. 'C+.06,1.09 -.084,+1.05 -.038,+.749', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M+.10,1.19 C.36,.55 -.27,+.45 -.27,+.10 L-.3,+.16 '
+	. 'C-.3,+.6 .25,.65 .125,1.12', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M-.3,+.16 C-.3,-.15 -.15,-.23 +.02,-.23 L+.02,-.21 '
+	. 'C-.15,-.21 -.27,-.15 -.27,+.10', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M+.02,-.23 C+.2,-.23 +.30,-.26 +.30,+.04 L+.256,+.04 '
+	. 'C+.27,-.11 +.2,-.21 +.02,-.21', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M+.30,+.04 C+.30,+.16 +.17,+.28 +.07,+.28 L+.07,+.19 '
+	. 'C+.17,+.19 +.26,+.16 +.265,+.04', closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M+.07,+.28 C-.15,+.28 -.15,+.05 -.05,-.05 '
+	. 'C-.10,+.05 -.08,+.19 +.07,+.19', closed=>'true', 'stroke-width'=>0);
+}
+sub timesig { my ($x, $y_top, $sh, $topnum, $botnum) = @_;
+	centrexshow($x, $y_top-.45*$sh, 'Times-Bold', 0.60*$sh, $topnum);
+	centrexshow($x, $y_top-.95*$sh, 'Times-Bold', 0.60*$sh, $botnum);
+}
+sub sharp { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+    $g->line(x1=>-0.13,y1=>0.02,  x2=>0.13,y2=>0.12,  'stroke-width'=>0.07);
+    $g->line(x1=>-0.13,y1=>-0.12, x2=>0.13,y2=>-0.02, 'stroke-width'=>0.07);
+    $g->line(x1=>-.065,y1=>-0.3,  x2=>-.065,y2=>0.24, 'stroke-width'=>0.03);
+    $g->line(x1=>0.065,y1=>-0.24, x2=>0.065,y2=>0.28, 'stroke-width'=>0.03);
+}
+sub natural { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+    $g->line(x1=>-0.09,y1=>0.04,  x2=>0.09,y2=>0.15,  'stroke-width'=>0.07);
+    $g->line(x1=>-0.09,y1=>-0.15, x2=>0.09,y2=>-0.04, 'stroke-width'=>0.07);
+    $g->line(x1=>-0.09,y1=>-0.15, x2=>-0.09,y2=>0.3,  'stroke-width'=>0.03);
+    $g->line(x1=>0.09, y1=>-0.3,  x2=>0.09, y2=>0.15, 'stroke-width'=>0.03);
+}
+sub flat { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+    $g->line(x1=>-0.07,y1=>0.45,  x2=>-0.07,y2=>-0.15, 'stroke-width'=>0.03);
+    $g->path(d=>'M-0.07,-0.15 C0.15,0.0 0.3,0.2 -.07,+.08',
+	 'fill-opacity'=>0, 'stroke-width'=>0.05);
+}
+sub doublesharp { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+    $g->path(d=>'M-.13,-.13 L-.11,-.03 L-.03,-.02 L-.03,+.02 L-.11,+.03 '
+	. 'L-.13,+.13 L-.03,+.11 L-.02,+.03 L+.02,+.03 L+.03,+.11 '
+	. 'L+.13,+.13 L+.11,+.03 L+.03,+.02 L+.03,-.02 L+.11,-.03 '
+	. 'L+.13,-.13 L+.03,-.11 L+.02,-.03 L-.02,-.03 L-.03,-.11',
+	 closed=>'true', 'stroke-width'=>0);
+}
+sub demisemiquaverrest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->circle( cx=>-.125, cy=>0.1425, r=>0.048, 'stroke-width'=>0 );
+    $g->path(d=>'M-.125,0.1425 A0.22 0.22 0 0 1 0.125 0.1425 L-0.05,-0.23',
+	 'fill-opacity'=>0, 'stroke-width'=>0.04);
+	$g->circle( cx=>-.135, cy=>0.017,  r=>0.048, 'stroke-width'=>0 );
+    $g->path(d=>'M-.135,0.017 A0.22 0.22 0 0 1 0.055 0.017',
+	 'fill-opacity'=>0, 'stroke-width'=>0.04);
+	$g->circle( cx=>-.145, cy=>-0.10,  r=>0.048, 'stroke-width'=>0 );
+    $g->path(d=>'M-.145,-0.10 A0.22 0.22 0 0 1 0.015 -0.10',
+	 'fill-opacity'=>0, 'stroke-width'=>0.04);
+}
+sub semiquaverrest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->circle( cx=>-.125, cy=>0.0625, r=>0.05, 'stroke-width'=>0 );
+    $g->path(d=>'M-.125,0.0625 A0.22 0.22 0 0 1 0.125 0.0625 L-0.05,-0.22',
+	 'fill-opacity'=>0, 'stroke-width'=>0.04);
+	$g->circle( cx=>-.135, cy=>-0.07,  r=>0.05, 'stroke-width'=>0 );
+    $g->path(d=>'M-.135,-0.07 A0.22 0.22 0 0 1 0.07 -0.07',
+	 'fill-opacity'=>0, 'stroke-width'=>0.04);
+}
+sub quaverrest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->circle( cx=>-.125, cy=>0.0625, r=>0.05, 'stroke-width'=>0 );
+    $g->path(d=>'M-.125,0.0625 A0.22 0.22 0 0 1 0.125 0.0625 L-0.05,-0.2',
+	 'fill-opacity'=>0, 'stroke-width'=>0.04);
+    # $g->line(x1=>0.125,y1=>0.0625,  x2=>-0.05,y2=>-0.2, 'stroke-width'=>0.04);
+}
+sub crochetrest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+    $g->line(x1=>-0.1,  y1=>0.3,   x2=>0.1,  y2=>0.1,  'stroke-width'=>0.04);
+    $g->line(x1=>0.03,  y1=>0.17,  x2=>-0.07,y2=>0.07, 'stroke-width'=>0.08);
+    $g->line(x1=>-0.098,y1=>0.098, x2=>0.08, y2=>-0.08,'stroke-width'=>0.04);
+    $g->path(d=>'M0.08,-0.08 C-0.1,-0.05 -0.2,-0.24 +0.08,-.3',
+	 'fill-opacity'=>0, 'stroke-width'=>0.05);
+}
+sub minimrest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-0.1,y1=>0.035, x2=>0.1,y2=>0.035,  'stroke-width'=>0.07);
+}
+sub smbrest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-0.13,y1=>0.045, x2=>0.13,y2=>0.045, 'stroke-width'=>0.09);
+}
+sub breverest { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-0.07,y1=>0.125, x2=>0.07,y2=>0.125, 'stroke-width'=>0.25);
+}
+sub font_family { my $font = $_[$[];
+	if ($font =~ /Helvetica/i) { return 'Helvetica, sans-serif'; }
+	return 'Times, Palatino, serif'; 
+}
+sub font_style { my $font = $_[$[];
+	if ($font =~ /Italic/i) { return 'italic'; }
+	return 'normal'; 
+}
+sub font_weight { my $font = $_[$[];
+	if ($font =~ /Bold/i) { return 'bold'; }
+	return 'normal'; 
+}
+sub rightshow { my ($x, $y, $font, $fontsize, $string) = @_;
+	$string =~ s/\\([()])/$1/g;
+	my $g = $page->group(transform=>"translate($x,$y) scale(1,-1)");
+	$g->text(x=>0, y=>0, 'font-family'=>font_family($font),
+	 'font-style'=>font_style($font), 'font-weight'=>font_weight($font),
+	 'text-anchor'=>'end', 'font-size'=>"${fontsize}px", '-cdata'=>$string);
+}
+sub leftshow { my ($x, $y, $font, $fontsize, $string) = @_;
+	$string =~ s/\\([()])/$1/g;
+	my $g = $page->group(transform=>"translate($x,$y) scale(1,-1)");
+	$g->text(x=>0, y=>0, 'font-family'=>font_family($font),
+	 'font-style'=>font_style($font), 'font-weight'=>font_weight($font),
+	 'font-size'=>"${fontsize}px", '-cdata'=>$string);
+}
+sub centreshow { my ($x, $y, $font, $fontsize, $string) = @_;
+	$string =~ s/\\([()])/$1/g;
+	my $g = $page->group(transform=>"translate($x,$y) scale(1,-1)");
+	$g->text(x=>0, y=>0, 'font-family'=>font_family($font),
+	 'font-style'=>font_style($font), 'font-weight'=>font_weight($font),
+	 'vertical-align'=>'-70%',
+	 'text-anchor'=>'middle', 'font-size'=>"${fontsize}px", '-cdata'=>$string);
+}
+sub centrexshow { my ($x, $y, $font, $fontsize, $string) = @_;
+	$string =~ s/\\([()])/$1/g;
+	my $g = $page->group(transform=>"translate($x,$y) scale(1,-1)");
+	$g->text(x=>0, y=>0, 'font-family'=>font_family($font),
+	 'font-style'=>font_style($font), 'font-weight'=>font_weight($font),
+	 'text-anchor'=>'middle', 'font-size'=>"${fontsize}px", '-cdata'=>$string);
+}
+sub slur { my ($x_l, $y_l, $x_r, $y_r, $updown, $staveheight) = @_;
+	my $dx = $x_r - $x_l;
+	my $dy = $y_r - $y_l;
+	my ($x_lmid, $y_lmid, $x_rmid, $y_rmid, $dy_top, $dy_bot);
+	if ($dx < 2.0*$staveheight) {  # short round tie
+		$x_lmid = 0.3333 * ($x_l+$x_l +$x_r);
+		$y_lmid = 0.3333 * ($y_l+$y_l +$y_r);
+		$x_rmid = 0.3333 * ($x_l+$x_r+$x_r);
+		$y_rmid = 0.3333 * ($y_l+$y_r+$y_r);
+		$dy_top = 0.37 * $staveheight * $updown;
+		$dy_bot = 0.30 * $staveheight * $updown;
+	} else {  # longer flatter tie
+		$x_lmid = $x_l + $staveheight;
+		$y_lmid = $y_l + $dy*$staveheight/$dx;
+		$x_rmid = $x_r - $staveheight;
+		$y_rmid = $y_r - $dy*$staveheight/$dx;
+		$dy_top = 0.52 * $staveheight * $updown;
+		$dy_bot = 0.46 * $staveheight * $updown;
+	}
+   	$page->path(
+		d=>(sprintf "M%g,%g C%g,%g %g,%g %g,%g C%g,%g %g,%g %g,%g z",
+       		$x_l,$y_l,
+			$x_lmid, $y_lmid+$dy_top, $x_rmid, $y_rmid+$dy_top, $x_r,$y_r,
+       		$x_rmid, $y_rmid+$dy_bot, $x_lmid, $y_lmid+$dy_bot, $x_l,$y_l
+		),
+		'stroke-width'=>0
+	);
+}
+sub fermata { my ($x, $y, $sh) = @_;
+	my $g = $page->group(
+		transform=>"translate($x,$y) scale($sh,$sh) translate(0,-0.11)"
+	);
+	$g->circle( cx=>0.0, cy=>0.0, r=>0.07, 'stroke-width'=>0 );
+	$g->path(d=>'M-.33,-.06 C-.33,+.41 +.33,+.41 +.33,-.06 L+.31,-.06 '.
+	 'C+.31,+.31 -.31,+.31 -.31,-.06 L-.33,-.06',
+	 closed=>'true', 'stroke-width'=>0);
+}
+sub mordent { my ($x, $y, $sh) = @_;
+	my $scale = 0.035 * $sh;
+	my $g = $page->group(transform=>"translate($x,$y) scale($scale,$scale)");
+	$g->line(x1=>-8,y1=>-2, x2=>-4,y2=>+2, 'stroke-width'=>0.5);
+	$g->line(x1=>-2,y1=>-2, x2=>+2,y2=>+2, 'stroke-width'=>0.5);
+	$g->line(x1=>+4,y1=>-2, x2=>+8,y2=>+2, 'stroke-width'=>0.5);
+	$g->line(x1=>0,y1=>-4,  x2=>0,y2=>+4,  'stroke-width'=>0.5);
+	$g->path(d=>'M+1,+1 L+2,+2 L+5,-1 L+4,-2',
+	 closed=>'true', 'stroke-width'=>0);
+	$g->path(d=>'M-1,-1 L-2,-2 L-5,+1 L-4,+2',
+	 closed=>'true', 'stroke-width'=>0);
+}
+sub trill { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale(1.2,-1.0)");
+	# ARghh... can't use centreshow because of $g
+	my $fontsize = sprintf "%g", 0.5*$sh;
+	$g->text(x=>0, y=>0.1*$sh, 'font-family'=>'Times, Palatino, serif',
+     'font-style'=>'italic', 'font-weight'=>'bold',
+     'text-anchor'=>'middle', 'font-size'=>"${fontsize}px", '-cdata'=>'tr');
+}
+sub trsharp { my ($x, $y, $sh) = @_;
+	trill($x, $y, $sh);
+	sharp($x+0.28*$sh, $y+0.11*$sh, 0.7*$sh);
+}
+sub trflat { my ($x, $y, $sh) = @_;
+	trill($x, $y, $sh);
+	flat($x+0.26*$sh, $y+0.11*$sh, 0.7*$sh);
+}
+sub trnat { my ($x, $y, $sh) = @_;
+	trill($x, $y, $sh);
+	natural($x+0.28*$sh, $y+0.11*$sh, 0.7*$sh);
+}
+sub turn { my ($x, $y, $sh) = @_;
+	my $scale = 0.8 * $sh;
+	my $g = $page->group(transform=>"translate($x,$y) scale($scale,$scale)");
+	turn_guts($g);
+}
+sub turn_guts { my $g = $_[$[];
+	# used by turn and segno, with different transforms
+	$g->circle( cx=>0.2, cy=>0.09, r=>0.06, 'stroke-width'=>0 );
+	$g->path(d=>'M+.25,+.15 C+.33,+.06 +.33,-.06 +.23,-.13 '
+	. 'C+0.1,-.13 +.05,-.1 0,-.05 L0,+.05 C+.05,+.01 +.1,-.09 +.23,-.09 '
+	. 'C+.28,-.05 +.29,+.05 +.25,+.13', closed=>'true', 'stroke-width'=>0);
+	$g->circle( cx=>-0.2, cy=>-0.09, r=>0.06, 'stroke-width'=>0 );
+	$g->path(d=>'M-.25,-.15 C-.33,-.06 -.33,+.06 -.23,+.13 '
+	. 'C-0.1,+.13 -.05,+.1 0,+.05 L0,-.05 C-.05,-.01 -.1,+.09 -.23,+.09 '
+	. 'C-.28,+.05 -.29,-.05 -.25,-.13', closed=>'true', 'stroke-width'=>0);
+}
+sub tenuto { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-0.13,y1=>0,  x2=>0.13,y2=>0,  'stroke-width'=>0.05);
+}
+sub emphasis { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-0.18,y1=>0.08,  x2=>0.18,y2=>0,  'stroke-width'=>0.03);
+	$g->line(x1=>-0.18,y1=>-0.08, x2=>0.18,y2=>0,  'stroke-width'=>0.03);
+}
+sub segno { my ($x, $y, $sh) = @_;
+	my $sx = 1.3 * $sh; my $sy = -1.3 * $sh;
+	my $g = $page->group(transform=>
+	 "translate($x,$y) scale($sx,$sy) rotate(80)");
+	turn_guts($g);
+	$g->line(x1=>0.1,y1=>0.2, x2=>-0.1,y2=>-0.2, 'stroke-width'=>0.03);
+	$g->circle( cx=>-0.05, cy=>0.16, r=>0.035, 'stroke-width'=>0 );
+	$g->circle( cx=>0.05, cy=>-0.16, r=>0.035, 'stroke-width'=>0 );
+}
+sub upbow { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>0.08,y1=>0.17, x2=>0.0,y2=>-0.19, 'stroke-width'=>0.03);
+	$g->line(x1=>-.08,y1=>0.17, x2=>0.0,y2=>-0.19, 'stroke-width'=>0.03);
+}
+sub downbow { my ($x, $y, $sh) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale($sh,$sh)");
+	$g->line(x1=>-.12,y1=>-.15, x2=>-.12,y2=>0.15, 'stroke-width'=>0.03);
+	$g->line(x1=>0.12,y1=>-.15, x2=>0.12,y2=>0.15, 'stroke-width'=>0.03);
+	$g->line(x1=>-.12,y1=>0.12, x2=>0.12,y2=>0.12, 'stroke-width'=>0.10);
+}
+sub guitar_string { my ($x, $y, $sh, $n) = @_;
+	my $g = $page->group(transform=>"translate($x,$y) scale(1,-1)");
+	$g->circle( cx=>0.0, cy=>0.0, r=>0.22*$sh,
+	 'fill'=>'white', 'stroke-width'=>0.042*$sh );
+	my $fontsize = 0.36*$sh;
+	$g->text(x=>.05*$sh, y=>.13*$sh, 'font-family'=>'Helvetica',
+     'font-weight'=>'bold', 'text-anchor'=>'middle',
+	 'font-size'=>"${fontsize}px", '-cdata'=>$n);
+}
+
+__END__
+
+# POD Documentation (perldoc or pod2html this file)
+=head1 NAME
+
+muscriptps2svg - Perl script to convert muscript output to SVG
+
+=head1 SYNOPSIS
+
+ muscript something > something.ps
+ muscriptps2svg something.ps > something.svg        # page 1
+ muscriptps2svg -p 3 something.ps > something.svg   # page 3
+ muscript something | muscriptps2svg > something.svg
+
+ for p in 1 2 3 4 5 6
+ do
+   muscriptps2svg -p $p something.ps > something_p$p.svg
+ done
+
+=head1 DESCRIPTION
+
+This script converts PostScript output produced by I<muscript>
+into SVG (Scaleable Vector Graphics) format.
+
+It needs the I<SVG> Perl module, available from
+http://search.cpan.org/search?mode=module&query=SVG
+
+It is not a general-purpose PostScript-to-SVG converter, and it will
+only handle PostScript output from muscript version 2.8i or above.
+
+=head1 OPTIONS
+
+=over 3
+
+=item I<-p 7>
+
+This example converts just the 7th page of the original
+
+=item I<-v>
+
+Prints version number.
+
+=back
+
+=head1 CHANGES
+
+ 20080731  1.1  supresses backslashing of brackets in PS strings
+ 20070608  1.0  first working version
+
+=head1 AUTHOR
+
+Peter J Billam  http://www.pjb.com.au/comp/contact.html
+
+=head1 SEE ALSO
+
+ http://www.pjb.com.au/muscript/index.html#tools
+ http://www.pjb.com.au/muscript/
+ http://www.pjb.com.au/muscript/samples/
+ http://www.svg.org/
+ perl(1)
+
+=cut
+

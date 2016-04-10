@@ -1,0 +1,474 @@
+#! /usr/bin/perl
+#
+#########################################################################
+#        This Perl script is Copyright (c) 2013, Peter J Billam         #
+#               c/o P J B Computing, www.pjb.com.au                     #
+#                                                                       #
+#     This script is free software; you can redistribute it and/or      #
+#            modify it under the same terms as Perl itself.             #
+#########################################################################
+my $Version       = '1.7'; # use either mencoder, ffmpeg or avconv
+my $VersionDate   = '07dec2014';
+
+use File::Copy();
+my $TmpDir        = "/tmp/muscript2video.$$";
+my $FrameNumber   = 0;      # used and incremented by next_filename()
+my $Width         = '1280'; # can be overridden with a boundingbox command
+my $Height        = '720';  # can be overridden with a boundingbox command
+my @ThisPage      = ();
+my $MidiTimesig   = '4/4';
+my $MidiBeatsPerBar  = 4;   # metronome-style tempo-markings
+my $TimePerBar    = 2.0;    # remember from page to page
+my $LineNum       = 0;
+my %Stave2Clef    = ();     # replaces muscript's (undeclared?) %clef hash
+my %Stave2Keysig  = ();     # 1.6
+my $ScaleStaves   = 1.46;
+my $TitleJpg      = '';
+my $CreditsJpg    = '';
+my $TimeSoFar     = 0.0;
+my $PrePad        = 0.0;    # will be set if -t
+my $PostPad       = 0.0;    # will be set if -c
+my $PageNum       = 0;
+my $Fps           = 5;
+my $Mencoder      = which('mencoder');  # 1.7
+my $Ffmpeg        = which('ffmpeg');    # 1.7
+my $Avconv        = which('avconv');    # 1.7
+# should also test for normalize, normalize-audio, timidity, fluadity etc
+
+while ($ARGV[$[] =~ /^-([a-z])/) {
+	if ($1 eq 'v')      { shift;
+		my $n = $0; $n =~ s{^.*/([^/]+)$}{$1};
+		print "$n version $Version $VersionDate\n";
+		exit 0;
+	} elsif ($1 eq 't') { shift; $TitleJpg   = shift;
+	} elsif ($1 eq 'c') { shift; $CreditsJpg = shift;
+	} else {
+		print "usage:\n";  my $synopsis = 0;
+		while (<DATA>) {
+			if (/^=head1 SYNOPSIS/)     { $synopsis = 1; next; }
+			if ($synopsis && /^=head1/) { last; }
+			if ($synopsis && /\S/)      { s/^\s*/   /; print $_; next; }
+		}
+		exit 0;
+	}
+}
+
+if (!$Mencoder and !$Ffmpeg and !$Avconv) {
+	die(" Sorry, can't find mencoder, ffmpeg nor avconv in your \$PATH\n");
+}
+
+my @Stack = <>;  # slurp onto the Stack, before changing directory
+if ($Stack[$[] =~ /^\s*boundingbox\s+(\d+)\s+(\d+)/) {
+	$Width = $1; $Height = $2;
+	shift @Stack;
+}
+
+if (! mkdir $TmpDir) { die "can't mkdir $TmpDir: $!\n"; }
+# for the same reason, we copy TitleJpg and CreditsJpg into TmpDir
+if ($TitleJpg)   {
+	if (! File::Copy::copy($TitleJpg, "$TmpDir/pre.jpg")) {
+		die "can't copy $TitleJpg to $TmpDir/pre.jpg: $!\n";
+	}
+}
+if ($CreditsJpg) {
+	if (! File::Copy::copy($CreditsJpg, "$TmpDir/post.jpg")) {
+		die "can't copy $CreditsJpg to $TmpDir/post.jpg: $!\n";
+	}
+}
+if (! chdir $TmpDir) { die "can't chdir $TmpDir: $!\n"; }
+
+# convert whole file to .mid using muscript thence to .wav using timidity
+# can't pipe directly, else timidity quits too soon when its stdin closes
+if (! open(P, '|-', 'muscript -midi > t.mid')) {
+	die "can't run muscript -midi > t.mid: $!\n";
+}
+print P @Stack;
+close P;
+wait;
+system 'timidity -Ow -o tmp.wav t.mid';
+system 'normalize-audio --peak tmp.wav';
+if ($TitleJpg or $CreditsJpg) {
+	if ($TitleJpg)   {
+		$PrePad  = 2.8;
+		$TimeSoFar += $PrePad;
+		my $first_filename = next_filename();
+		rename 'pre.jpg', $first_filename;
+		my $num_links = round($Fps*$PrePad - 3);
+		foreach (1..$num_links) {
+			$new_filename = next_filename();
+			if (! link $first_filename, $new_filename) {
+				die "can't link $first_filename, $new_filename : $!\n";
+			}
+		}
+	}
+	if ($CreditsJpg) { $PostPad = 3.4; }
+	warn "sox tmp.wav t.wav pad $PrePad $PostPad\n";
+	system "sox tmp.wav t.wav pad $PrePad $PostPad";
+	unlink 'tmp.wav';
+} else {
+	rename 'tmp.wav', 't.wav';
+}
+
+while (@Stack) {  # the main loop through the input-file
+    $LineNum++;
+    my $line = shift @Stack;
+    while ($line =~ s{\\\n$}{}) {
+        my $nxt = shift @Stack; $line .= $nxt; $LineNum++;
+    }
+	# divide the file into pages
+	if ($line =~ /^\s*\d+\s+systems/) {
+		if (@ThisPage) { page2jpgs(@ThisPage); }  # get rid of previous page
+		@ThisPage = ($line);                      # start new one
+	} else {
+		push @ThisPage, $line;
+	}
+}
+if (@ThisPage) { page2jpgs(@ThisPage); }
+if ($CreditsJpg) {
+	my $first_filename = next_filename();
+	rename 'post.jpg', $first_filename;
+	my $num_creditframes = round($Fps*$PostPad - 1);
+	foreach (1..$num_creditframes) {
+		my $new_filename = next_filename();
+		if (! link $first_filename, $new_filename) {
+			die "can't link $first_filename, $new_filename : $!\n";
+		}
+	}
+}
+
+
+my $aspect = sprintf '%5g', $Width/$Height;
+if ($Mencoder) {
+	# generate the video: MPEG4 video,
+	# mencoder -oac help gives:  Available codecs:
+	#    copy     - frame copy, without re-encoding (useful for AC3)
+	#    pcm      - uncompressed PCM audio
+	#    mp3lame  - cbr/abr/vbr MP3 using libmp3lame
+	#    lavc     - FFmpeg audio encoder (MP2, AC3, ...)
+	# mp3lame and faac and x264enc are not necessarily not compiled in;
+	# in practice, pcm works.
+	system "$Mencoder -audiofile t.wav -oac pcm -fps $Fps -ofps $Fps "
+	  . "'mf://t_*.jpg' -mf h=$Height:w=$Width:fps=$Fps:type=jpeg "
+	  .  "-o t.avi -ovc lavc -lavcopts vcodec=mpeg4:aspect=$aspect";
+	# 20130703 and yet, it comes out about 10% too fast, then waits at
+	# the final frame for the audio to finish. Fixed by using -oac pcm !
+	# 20130705 yet now, with f3o, around bars 110-130 the video starts running
+	# late, ending up about 2 bars late by the end.
+	# It's a long-standing muscript bug !!! fixed in 3.1s !!! :-)
+} elsif ($Ffmpeg) {
+	# ffmpeg [[infile options][-i infile]]... {[outfile options] outfile}..
+	# For creating a video from many images:
+	#   ffmpeg -f image2 -i foo-%03d.jpeg -r 12 -s 1280x720 foo.avi
+	# "image2" is the image file demuxer,
+	#   which reads from a list of image files specified by a pattern.
+	system "$Ffmpeg -i t.wav -f image2 -r $Fps -i t_%06d.jpg "
+	  . "-r $Fps -s ${Width}x$Height t.avi";   # 1.7 worked first try :-)
+} elsif ($Avconv) {
+	system "$Avconv -i t.wav -f image2 -r $Fps -i t_%06d.jpg "
+	  . "-r $Fps -s ${Width}x$Height t.avi"; # 1.7 aftefact at start of audio
+} else {
+	die " BUG: shouldn't reach here...";
+}
+
+system "mplayer t.avi";
+
+warn "\n your video is: $TmpDir/t.avi\n";
+
+# clean up ?
+
+exit;
+
+sub which {
+	my @PATH = split (":",$ENV{PATH});
+	my $f; foreach $d (@PATH) {$f="$d/$_[$[]";  return $f if -x $f; }
+}
+
+sub page2jpgs { my @lines = @_;
+	# generate the eps thence the jpg
+	# if it's the first time this stave appears on the page,
+	# regurgitate the remembered clef.
+	$PageNum += 1;
+	my $barnum_on_this_page = 0;  # we are within which bar ?
+	foreach my $line (@lines) {
+		$line =~ s/^\s*(#P)?\s*//;
+		my @words = split ' ', $line;
+		if ($barnum_on_this_page > 1.5) {  # note keysigs in later bars
+			if ($words[$[] =~ /^=(\d+)/) {
+				my $stave = $1;
+				if ($line =~ m{\s(\d+[b#])\s}) {   # 1.6
+					$Stave2Keysig{$stave} = $1;
+# warn "2) Stave2Keysig{$stave}=$Stave2Keysig{$stave}\n";
+				} elsif ($line =~ m{\s0\s}) {   # 1.6
+					delete $Stave2Keysig{$stave};
+# warn "2) deleting Stave2Keysig{$stave}\n";
+				}
+			}
+			next;
+		}
+		if ($words[$[] eq 'pagenum') {
+			if (! $words[$[+1]) { $line = "pagenum $PageNum\n";
+			} elsif ($words[$[+1] =~ /^\d+$/) { $PageNum = 0 + $words[$[+1];
+			} else { warn " strange line: $line\n";
+			}
+		} elsif ($words[$[] =~ /\|/) {   # only process the first bar here...
+			$barnum_on_this_page += 1;
+			if ($barnum_on_this_page > 1.5) { next; }
+		} elsif ($words[$[] =~ /^=(\d+)/) {
+			my $stave = $1;
+			my $keysig_is_present = 0;
+			if ($line =~ m{\s(\d+[b#])\s}) {   # 1.6
+				$Stave2Keysig{$stave} = $1;
+				$keysig_is_present = 1;
+# warn "1) Stave2Keysig{$stave}=$Stave2Keysig{$stave}\n";
+			}
+			if (is_a_clef($words[$[+1])) {
+				if ($Stave2Keysig{$stave} and !$keysig_is_present) {   # 1.6
+					my $keysig = $Stave2Keysig{$stave};
+					$line =~ s/\s(\w+)\s/ $1 $keysig /;
+				}
+			} else {
+				my $clef = $Stave2Clef{$stave};
+				if ($Stave2Keysig{$stave} and !$keysig_is_present) {   # 1.6
+					$clef .= " $Stave2Keysig{$stave}";
+				}
+				$line =~ s/\s/ $clef /;
+			}
+		}
+	}
+
+	my $first_filename = next_filename();
+	if (! open(P, '|-', "muscript | eps2jpg > $first_filename")) {
+		die "can't run muscript | eps2jpg > $first_filename : $!\n";
+	}
+	print P "boundingbox $Width $Height\n", @lines;
+	close P;
+	wait;
+
+	# take a snapshot for possible diagnostic purposes
+	my $tf = $first_filename; $tf =~ s/jpg$/txt/;  open(F, '>', $tf);
+	print F "boundingbox $Width $Height\n", @lines;
+	close F;
+
+	# and hardlink to the initial jpg the right number of times
+	my $time_this_page  = 0.0;
+	my $time_this_bar   = 0.0;
+	foreach my $line (@lines) {
+		$line =~ s/^\s+//;
+		if ($line =~ /^(\|\s*(\d+\/\d+)?\s+)(\S.*)$/) {
+			my $first_bit = $1;   # not used here...
+			my $timesig = $2;
+			my $durations = $3;
+			if ($timesig and ($MidiTimesig ne $timesig)) {
+				$MidiTimesig = $timesig;
+				my ($nn,$dd) = split '/', $MidiTimesig;
+				if (($dd eq '8' or $dd eq '16' or $dd eq '32')
+				  and ($nn%3 == 0)) {
+					$MidiBeatsPerBar = round($nn / 3);
+				} else {
+					$MidiBeatsPerBar = 0 + $nn;
+				}
+			}
+			my @numbers = split (' ', $durations);
+			$time_this_bar  = 0.0;
+			foreach my $number (@numbers) {
+				if ((0+$number) > 10) {   # it's a metronome-style beats/min
+					my $num_numbers = scalar @numbers;
+					$time_this_bar += (
+					  $MidiBeatsPerBar * 60 / ($number * $num_numbers));
+				} else {
+					$time_this_bar += $number;   # it's in seconds
+				}
+			}
+			$time_this_page += $time_this_bar;
+			$TimePerBar = $time_this_bar;
+		} elsif ($line =~ /^\|\s*(\d+\/\d+)?/) {
+			# if @numbers is empty but the timesig changes ?
+			$time_this_page += $TimePerBar;
+		} elsif ($line =~ /^midi pause ([.\d]+)/) {
+			$time_this_page += $1;
+		} elsif ($line =~ /^=(\d+)/) {   # remember any clef change...
+			my $stave = $1;
+			foreach my $word (split ' ', $line) {
+				if (is_a_clef($word)) { $Stave2Clef{$stave} = $word; }
+			}
+		} elsif ($line =~ /^(\d+)\s+bars?\s/) {  # scale the staves
+		}
+	}
+	$TimeSoFar += $time_this_page;
+	my $num_links = round($Fps*$TimeSoFar - $FrameNumber) - 1;
+
+	foreach (1 .. $num_links) {
+		my $new_filename = next_filename();
+		if (! link $first_filename, $new_filename) {
+			die "can't link $first_filename, $new_filename : $!\n";
+		}
+	}
+}
+
+sub next_filename {
+	$FrameNumber += 1;
+	my $filename = sprintf "t_%06d.jpg", $FrameNumber;
+}
+
+sub is_a_clef { my $s = $_[$[];
+	if ($s eq 'treble' || $s eq 'treble8va' || $s eq 'treble8vab' ||
+	    $s eq 'alto' || $s eq 'tenor' ||
+	    $s eq 'bass' || $s eq 'bass8va' || $s eq 'bass8vab' ) { return 1;
+	} else { return 0;
+	}
+}
+
+sub round { my $x = $_[$[];
+	if ($x > 0.0) { return int ($x + 0.5); }
+	if ($x < 0.0) { return int ($x - 0.5); }
+	return 0;
+}
+
+
+__END__
+
+=pod
+
+=head1 NAME
+
+muscript2video - generates a page-turning video from a muscript file
+
+=head1 SYNOPSIS
+
+  muscript2video file
+  muscript2video -t title.jpg -c credits.jpg file
+  muscript2video -v        # show the version
+  perldoc muscript2video   # read the manual
+
+=head1 DESCRIPTION
+
+This Perl script takes a muscript score
+and generates an I<.avi> file, ready for upload to I<youtube>.
+
+It uses I<muscript -midi> and I<timidity>
+to generate a I<.wav> file of the soundtrack.
+
+The input file may begin with a I<boundingbox 1280 720> statement,
+and should typically have say five or six staves per page
+instead of say twelve (normal for A4 and US-letter).
+The staveheights in the I<system> line should be
+about 50% bigger than for A4, say perhaps 30 pixels instead of 19 point.
+The muscript-file therefore needs to be copied
+from the A4 muscript-file and edited by hand.
+
+This script uses I<muscript> to generate a separate I<.jpg> file for each page,
+repeating it with incrementing filenames for each fifth-of-a-second
+that the page lasts.
+
+By default, it uses I<mencoder> to generate the I<.avi> file,
+using a mpeg4 video-codec and mp3 audio-codec that
+seem to be handled well by I<youtube>.
+But I<mencoder> is no longer available in I<debian jessie>,
+so since version 1.7, I<mencoder>, I<ffmpeg> and I<avconv> can all be used.
+
+The default is I<boundingbox 1280 720> which generates high-quality video,
+and doesn't really need the bars-per-line formatting
+to be changed from the Postscript version, though
+even with a 50% increase in staveheight, extra bars can often be fitted in.
+The old I<boundingbox 800 600> gives a 4:3 aspect ratio and is deprecated;
+it will be padded by I<youtube> with blank on either side
+and and the staves will look very small.
+
+=head1 OPTIONS
+
+=over 3
+
+=item B<-t title.jpg>
+
+The file I<title.jpg> will be displayed for 2.6 seconds
+before the beginning of the music.
+It must be of B<exactly> the same geometry as specified
+in your I<boundingbox 1280 720> statement, or 1280x720 by default.
+If it is even slightly different, I<mencoder> will fail to make the video,
+producing numerous but totally unhelpful error messages.
+
+=item B<-c credits.jpg>
+
+The file I<credits.jpg> will be displayed for 2.6 seconds
+after the end of the music.
+It must be of B<exactly> the same geometry as specified
+in your I<boundingbox 1280 720> statement, or 1280x720 by default.
+If it is even slightly different, I<mencoder> will fail to make the video,
+producing numerous but totally unhelpful error messages.
+
+You can use I<eps2jpg> to generate these I<.jpg> files
+directly from I<.eps> files such as:
+
+ %!PS-Adobe-3.0 EPSF-3.0
+ %%BoundingBox: 0 0 1280 720
+ %%EndComments
+ %%BeginProlog
+ /centreshow { % usage: x y font fontsize (string) centreshow
+    /s exch def /fontsize exch def /font exch def 
+    gsave moveto font findfont fontsize scalefont setfont
+    gsave s false charpath flattenpath pathbbox grestore
+    exch 4 -1 roll pop pop s stringwidth pop -0.5 mul  % dx/2
+    3 1 roll sub 0.5 mul % dy/2
+    rmoveto s show grestore
+ } bind def
+ %%EndProlog
+ 640 360 /Times-BoldItalic 90 (www.pjb.com.au) centreshow
+ %%EOF
+
+=back
+
+=head1 QUIRKS
+
+I<TiMidity> produces an audio file which begins with the first note.
+Therefore, if your score begins with a rest, the pages will be turned
+out of sync with the audio.  Work around this by assigning very high
+tempi to the initital rests, for example:
+ | 4/4 0.001 0.001 0.001 .32 .32 .32 .32 .32
+ =1 treble 4/4 4. rest 8 A 4 Bb 8. [F# 16 G#]
+
+=head1 AUTHOR
+
+Peter J Billam  http://www.pjb.com.au/comp/contact.html
+
+=head1 INSTALLATION
+
+Choose some directory in your PATH (we'll use /usr/local/bin as an example).
+Move the script to /usr/bin/local/muscript2video and make it executable.  
+For example,
+
+  cd /usr/local/bin/   # or somewhere else in your PATH
+  wget http://www.pjb.com.au/muscript/muscript2video
+  chmod 755 muscript2video
+
+Edit the first line if necessary
+to reflect where Perl is installed on your system.
+
+=head1 CHANGES
+
+ 20141207  1.7 if no mencoder (eg: in debian jessie) use ffmpeg or avconv
+ 20130711  1.6 remember the keysig from page to page
+ 20130707  1.5 uses t_*.jpg to avoid pre.jpg and post.jpg being included
+ 20130707  1.4 first release
+ 20130707  1.3 almost releaseable
+ 20130704  1.2 pagenum increments; you must scale the staves by hand
+ 20130703  1.1 -t and -c; needs pagenum++ and some scaling decisions
+ 20130730  1.0 first working version
+
+=head1 SEE ALSO
+
+ http://www.pjb.com.au/muscript/muscript2video
+ http://www.pjb.com.au/muscript/eps2jpg
+ http://www.pjb.com.au/muscript
+ http://www.pjb.com.au/midi
+ timidity(1)
+ timidity.cfg(5)
+ mencoder(1)
+ ffmpeg(1)
+ avconv(1)
+ ffmpeg(1)
+ identify(1)   # to check the exact dimensions of your title.jpg
+ sox(1)        # if -t or -c, muscript2video uses sox to pad the audio
+ perl(1)
+
+=cut
+

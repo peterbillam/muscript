@@ -1,0 +1,128 @@
+#! /usr/bin/perl
+#########################################################################
+#        This Perl script is Copyright (c) 2006, Peter J Billam         #
+#               c/o DPIWE, Hobart, Tasmania, Australia                  #
+#                                                                       #
+#     This script is free software; you can redistribute it and/or      #
+#            modify it under the same terms as Perl itself.             #
+#########################################################################
+my $Version       = '1.0';
+my $VersionDate   = '7nov2006';
+
+while ($ARGV[$[] =~ /^-([a-z])/) {
+   if ($1 eq 'v')      { shift;
+		my $n = $0; $n =~ s{^.*/([^/]+)$}{$1};
+		print "$n version $Version $VersionDate\n";
+		exit 0;
+   } else {
+		print "usage:\n";  my $synopsis = 0;
+		while (<DATA>) {
+			if (/^=head1 SYNOPSIS/)     { $synopsis = 1; next; }
+			if ($synopsis && /^=head1/) { last; }
+			if ($synopsis && /\S/)      { s/^\s*/   /; print $_; next; }
+		}
+		exit 0;
+	}
+}
+my @bass_bars = [];
+my %already_output;
+
+my $bass_page = 0;
+my $ibar;
+my $line;
+print "3 systems /19-25-25 19-25-25/\npagenum\n";
+LINE:
+while ($line = <>) {
+	my $nextline;
+	if ($line =~ s{\\\n$}{} and $nextline = <>) { $line .= $nextline; redo; }
+	if ($line =~ /^\s*\d+\s+systems/) {
+		$bass_page = !$bass_page;
+		if ($bass_page) { @bass_bars = []; } # should be empty already
+		$ibar = $[;
+		if (! $bass_page) {
+			my $bass_bar_ref = shift @bass_bars;
+			print @{$bass_bar_ref};
+		}
+		next LINE;
+	}
+	next LINE if $line =~ m{^\s*/};
+	next LINE if $line =~ /^\s*\d+\sbars/;
+	next LINE if $line =~ /^\s*pagenum/;
+	# 20140214 get rid of qw() which is now deprecated
+	foreach my $s ('title', 'innerhead', 'leftfoot', 'rightfoot') {
+		if ($line =~ /^\s*$s/) {
+			next LINE if $already_output{$s};
+			$already_output{$s} = 1;
+			print $line;
+			next LINE;
+		}
+	}
+	if ($bass_page) {
+		$line =~ s/^\s*=1/=3/;
+		$line =~ s/^\s*=2/=4/;
+		if ($line =~ /^\s*\|/) { $ibar++; next LINE; }
+		push @{$bass_bars[$ibar]}, $line;
+	} else {
+		if ($line =~ /^\s*\|/) {
+			$ibar++;
+			my $bass_bar_ref = shift @bass_bars;
+			print $line, @{$bass_bar_ref};
+			next LINE;
+		}
+		print $line;
+	}
+}
+
+__END__
+
+=pod
+
+=head1 NAME
+
+4hands2score - converts muscript for 4hands into a score, e.g. for midi
+
+=head1 SYNOPSIS
+
+ 4hands2score my_piano_duet | muscript -midi > my_piano_duet.mid
+ 4hands2score my_piano_duet | muscript -midi | aplaymidi -
+ perldoc 4hands2score
+
+=head1 DESCRIPTION
+
+Converts muscript written for 4hands
+(i.e. the two players' parts are on alternate pages)
+into a score,
+e.g. for generating a midi version,
+or for rearranging for some chamber-group.
+
+It depends on each page starting with a B<systems> command;
+this will usually be the case in a four-hand-piano score,
+because no-one wants bars from one player to wrap over onto the other
+player's page.
+
+Is also assumes that each player's part fits onto two staves.
+
+If you have global midi commands
+( see http://www.pjb.com.au/muscript/index.html#midi )
+then you should put them in the bass-player's page.
+
+=head1 OPTIONS
+
+=over 3
+
+=item I<-v>
+
+Prints version number.
+
+=back
+
+=head1 AUTHOR
+
+Peter J Billam  http://www.pjb.com.au/comp/contact.html
+
+=head1 SEE ALSO
+
+http://www.pjb.com.au/muscript
+
+=cut
+

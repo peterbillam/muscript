@@ -1,0 +1,90 @@
+#! /usr/bin/perl
+#
+# tempo: adjusts the midi tempo of muscript scores. Peter J Billam, 2005
+# see http://www.pjb.com.au/muscript/
+#
+#########################################################################
+#        This Perl script is Copyright (c) 2005, Peter J Billam         #
+#               c/o P J B Computing, www.pjb.com.au                     #
+#                                                                       #
+#     This script is free software; you can redistribute it and/or      #
+#            modify it under the same terms as Perl itself.             #
+#########################################################################
+my $Version       = '1.1';
+my $VersionDate   = '20oct2012';
+
+my $Continuing = 0;    # any escaped newline  1.1
+my $ContinuingBar = 0; # escaped newline in a Bar command  1.1
+my $Ratio = 0+$ARGV[$[]; shift;
+if (!$Ratio) { die "usage: $0 1.05 <file>   # increases tempo 5%\n"; }
+
+while (<>) {
+	chop;
+	if ($ContinuingBar
+	  or (/^(\s*\|\s*(\d+\/\d+)?\s+)(\S.*)$/ and !$Continuing)) {
+		my $first_bit = $1;
+		my @numbers = split (' ', $3);
+		$IsContinuing = /\\$/;
+		foreach (@numbers) {
+			if      ($_ > 10)  { $_ = sprintf ('%g', $_*$Ratio);
+			} elsif ($_>0.001) { $_ = sprintf ('%g', $_/$Ratio);
+			}
+		}
+		print $first_bit, join (' ', @numbers), "\n";
+	} else {
+		$ContinuingBar = 0;
+		print "$_\n";
+	}
+	$Continuing = /\\$/;
+}
+
+__END__
+
+=pod
+
+=head1 NAME
+
+tempo - adjusts the midi tempo of muscript scores.
+
+=head1 SYNOPSIS
+
+  tempo 1.03 file   # makes file 3% faster (about 1 metronome mark)
+
+  tempo .91 file    # makes file 9% slower
+
+  for t in 0.80 0.84 0.88 0.92 0.96 1.00
+  do
+    tempo $t my_piece | muscript -midi > my_piece_$t.mid
+  done              # generate practice-versions with different tempi
+
+=head1 DESCRIPTION
+
+This Perl script adjusts the midi tempo of muscript scores
+by the amount of the first argument.
+
+=head1 AUTHOR
+
+Peter J Billam  http://www.pjb.com.au/comp/contact.html
+
+=head1 INSTALLATION
+
+Edit the first line if necessary
+to reflect where Perl is installed on your system.
+Choose some directory in your PATH (we'll use /usr/local/bin as an example).
+Move the script to /usr/bin/local/tempo and make it executable.  
+For example,
+
+  cp tempo /usr/local/bin/tempo
+  chmod 755 /usr/local/bin/tempo
+
+=head1 SEE ALSO
+
+ 20121020  1.1  handles newline-escaped 'bars' lines
+ 20070605  1.0  first working version
+
+=head1 SEE ALSO
+
+http://www.pjb.com.au/muscript, perl(1).
+
+=cut
+
