@@ -31,7 +31,7 @@ WhiteBlobHalfHeight   = 0.122
 SmallNoteRatio        = 0.61
 SmallStemRatio        = 0.76
 StemFromBlobCentre    = 0.176
-DotRightOfNote        = 0.38
+DotRightOfNote        = 0.30    -- 3.2m
 DotAboveNote          = 0.06
 NoteShift             = 0.28
 AccidentalShift       = 0.19
@@ -550,45 +550,45 @@ if not MIDI and not XmlOpt then PS_Prolog = [[
 
 /hemidemisemiquaverrest {  % x y staveheight hemidemisemiquaverrest  3.2m
 	gsave 3 1 roll translate dup scale 0.03 setlinewidth
-	newpath -0.125  0.180  0.048 0 360 arc fill
-	newpath  0      0.37   0.22  245 295 arc -0.05 -0.29 lineto stroke
-	newpath -0.137  0.065  0.048 0 360 arc fill
-	newpath -0.03   0.27   0.22 245 295 arc stroke
-	newpath -0.149 -0.060  0.048 0 360 arc fill
-	newpath -0.06   0.135  0.21 245 292 arc stroke
-	newpath -0.161 -0.175  0.048 0 360 arc fill
-	newpath -0.08   0.02   0.20 245 290 arc stroke grestore
+	newpath -0.10   0.180  0.048 0 360 arc fill
+	newpath  0.03   0.37   0.22  245 295 arc -0.02 -0.29 lineto stroke
+	newpath -0.107  0.065  0.048 0 360 arc fill
+	newpath -0.00   0.27   0.22 245 295 arc stroke
+	newpath -0.120 -0.060  0.048 0 360 arc fill
+	newpath -0.03   0.135  0.21 245 292 arc stroke
+	newpath -0.131 -0.175  0.048 0 360 arc fill
+	newpath -0.05   0.02   0.20 245 290 arc stroke grestore
 } bind def
 
 /demisemiquaverrest {	% usage: x y staveheight demisemiquaverrest
 	gsave 3 1 roll translate dup scale 0.03 setlinewidth
-	newpath -0.125  0.18   0.048 0 360 arc fill
-	newpath  0      0.37   0.22  245 295 arc -0.05 -0.21 lineto stroke
-	newpath -0.135  0.065  0.048 0 360 arc fill
-	newpath -0.04   0.275  0.22 245 295 arc stroke
-	newpath -0.145 -0.065  0.048 0 360 arc fill
-	newpath -0.07   0.135  0.21 245 292 arc stroke grestore
+	newpath -0.09   0.18   0.048 0 360 arc fill
+	newpath  0.02   0.37   0.22  245 295 arc -0.01 -0.21 lineto stroke
+	newpath -0.10   0.065  0.048 0 360 arc fill
+	newpath -0.00   0.275  0.22 245 295 arc stroke
+	newpath -0.11  -0.065  0.048 0 360 arc fill
+	newpath -0.03   0.135  0.21 245 292 arc stroke grestore
 } bind def
 
 /semiquaverrest {	% usage: x y staveheight semiquaverrest
 	gsave 3 1 roll translate dup scale 0.03 setlinewidth
-	newpath -0.125  0.07  0.05 0 360 arc fill
-	newpath  0      0.29  0.25   245 290 arc -0.05 -0.22 lineto stroke
-	newpath -0.135 -0.07  0.05 0 360 arc fill
-	newpath -0.04   0.14  0.22 245 285 arc stroke grestore
+	newpath -0.09   0.07  0.05 0 360 arc fill
+	newpath  0.03   0.29  0.25   245 290 arc -0.02 -0.22 lineto stroke
+	newpath -0.11  -0.07  0.05 0 360 arc fill
+	newpath -0.01   0.14  0.22 245 285 arc stroke grestore
 } bind def
 
 /quaverrest {	% usage: x y staveheight quaverrest
 	gsave 3 1 roll translate dup scale 0.035 setlinewidth
-	newpath -0.125  0.08  0.05 0 360 arc fill
-	newpath  0      0.29  0.24 245 290 arc -0.05 -0.2 lineto stroke
+	newpath -0.10   0.08  0.05 0 360 arc fill
+	newpath  0.02   0.29  0.24 245 290 arc -0.03 -0.2 lineto stroke
 	grestore
 } bind def
 
 /crochetrest {	% usage: x y staveheight crochetrest
 	gsave 3 1 roll translate dup scale newpath
-	newpath 0.04 setlinewidth -0.1 0.3 moveto 0.1 0.1 lineto stroke
-	newpath 0.08 setlinewidth 0.03 0.17 moveto -0.07 0.07 lineto stroke
+	newpath 0.04 setlinewidth -0.1   0.3 moveto 0.1 0.1 lineto stroke
+	newpath 0.08 setlinewidth  0.03  0.17 moveto -0.07 0.07 lineto stroke
 	newpath 0.04 setlinewidth -0.098 0.098 moveto 0.08 -0.08 lineto
 	-0.1 -0.05 -0.2 -0.24 0.08 -0.3 curveto stroke grestore
 } bind def
@@ -1613,6 +1613,7 @@ end
 local function dypitch (pitch)
 	local y = Ytable[pitch]
 	if not y then warn_ln('unrecognisable pitch: ',pitch) ; return 0 end
+	if not Stave2clef[Istave] then return y end  -- 3.2m
 	if find(Stave2clef[Istave], '^treble') then y = y + 0.125
 	elseif Stave2clef[Istave] == 'tenor' then y = y + 0.25
 	elseif find(Stave2clef[Istave], '^bass') then y = y - 0.125
