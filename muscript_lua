@@ -31,7 +31,8 @@ WhiteBlobHalfHeight   = 0.122
 SmallNoteRatio        = 0.61
 SmallStemRatio        = 0.76
 StemFromBlobCentre    = 0.176
-DotRightOfNote        = 0.30    -- 3.2m
+DotRightOfNote        = 0.36    -- 3.2m
+DotRightOfRest        = 0.29    -- 3.2m
 DotAboveNote          = 0.06
 NoteShift             = 0.28
 AccidentalShift       = 0.19
@@ -1836,12 +1837,13 @@ local function ps_rest (currentpulse, symbol, X)
 		printf("%g %g %g semiquaverrest", X,Y,smallstvhgt)
 	end
 	if find(currentpulse, "%.%.$") then  -- print the dot, if any
-		local x_plus  = X + DotRightOfNote * StvHgt
+		-- should give breverest more space, probably DotRightOfNote
+		local x_plus  = X + DotRightOfRest * StvHgt   -- 3.2m
 		-- should only raise dot if note on line ...
 		local y_minus = Y + DotAboveNote * StvHgt 
 		printf("%g %g %g doubledot", x_plus,y_minus,StvHgt)
 	elseif find(currentpulse, "%.$") then
-		local x_plus  = X + DotRightOfNote * StvHgt;
+		local x_plus  = X + DotRightOfRest * StvHgt   -- 3.2m
 		-- should only raise dot if note on line ...
 		local y_minus = Y + DotAboveNote * StvHgt 
 		printf("%g %g %g dot", x_plus,y_minus,StvHgt)

@@ -67,7 +67,8 @@ $WhiteBlobHalfHeight   = 0.122;
 $SmallNoteRatio        = 0.61;
 $SmallStemRatio        = 0.76;
 $StemFromBlobCentre    = 0.176;
-$DotRightOfNote        = 0.30;  # 3.2m
+$DotRightOfNote        = 0.36;  # 3.2m
+$DotRightOfRest        = 0.29;  # 3.2m
 $DotAboveNote          = 0.06;
 $NoteShift             = 0.28;
 $AccidentalShift       = 0.19;
@@ -4100,12 +4101,13 @@ sub ps_rest { my ($currentpulse, $symbol, $X) = @_;
 	}
 	# print the dot, if any
 	if ($currentpulse =~ /\.\.$/) {
-		my $x_plus  = $X + $DotRightOfNote * $StvHgt; 
+		# should give breverest more space, probably DotRightOfNote
+		my $x_plus  = $X + $DotRightOfRest * $StvHgt;  # 3.2m
 		# should only raise dot if note on line ...
 		my $y_minus = $Y + $DotAboveNote * $StvHgt; 
 		printf ("%g %g %g doubledot\n", $x_plus, $y_minus, $StvHgt);
 	} elsif ($currentpulse =~ /\.$/) {
-		my $x_plus  = $X + $DotRightOfNote * $StvHgt; 
+		my $x_plus  = $X + $DotRightOfRest * $StvHgt;  # 3.2m
 		# should only raise dot if note on line ...
 		my $y_minus = $Y + $DotAboveNote * $StvHgt; 
 		printf ("%g %g %g dot\n", $x_plus, $y_minus, $StvHgt);
