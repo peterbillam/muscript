@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2m for Lua5'  -- 64 rest and hds7
-VersionDate  = '09apr2016';
+Version = '3.2n for Lua5'  -- neater dotted bre and smb rests
+VersionDate  = '12apr2016';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -1812,12 +1812,16 @@ local function ps_rest (currentpulse, symbol, X)
 	if find(currentpulse,"-s$") then
 		smallstvhgt = smallstvhgt * SmallStemRatio
 	end
+	local dot_above_note    = DotAboveNote  -- 3.2n
+	local dot_right_of_rest = DotRightOfRest  -- 3.2n
 	if find(currentpulse, "^smb") then
 		Y = Y + 0.25*StvHgt ;  dy = dy + 0.25  -- 4th stave-line
 		printf("%g %g %g smbrest", X,Y,StvHgt)
 		if dy > 0.2 or dy < -1.2 then  -- 2.7t
 			printf("%g %g %g ledger", X,Y,StvHgt)
 		end
+		dot_above_note    = 0.0 - DotAboveNote  -- 3.2n
+		dot_right_of_rest = DotRightOfNote      -- 3.2n
 	elseif find(currentpulse, "^min") then
 		printf("%g %g %g minimrest", X,Y,StvHgt)
 		if dy > 0.2 or dy < -1.2 then  -- 2.7t
@@ -1829,6 +1833,7 @@ local function ps_rest (currentpulse, symbol, X)
 		printf("%g %g %g quaverrest", X,Y,smallstvhgt)
 	elseif find(currentpulse, "^bre") then
 		printf("%g %g %g breverest", X,Y,StvHgt)
+		dot_above_note    = 0.125   -- 3.2n
 	elseif find(currentpulse, "^dsq") then
 		printf("%g %g %g demisemiquaverrest",X,Y,smallstvhgt)
 	elseif find(currentpulse, "^hds") then
@@ -1838,14 +1843,14 @@ local function ps_rest (currentpulse, symbol, X)
 	end
 	if find(currentpulse, "%.%.$") then  -- print the dot, if any
 		-- should give breverest more space, probably DotRightOfNote
-		local x_plus  = X + DotRightOfRest * StvHgt   -- 3.2m
+		local x_plus  = X + dot_right_of_rest * StvHgt -- 3.2m 3.2n
 		-- should only raise dot if note on line ...
-		local y_minus = Y + DotAboveNote * StvHgt 
+		local y_minus = Y + dot_above_note * StvHgt 
 		printf("%g %g %g doubledot", x_plus,y_minus,StvHgt)
 	elseif find(currentpulse, "%.$") then
-		local x_plus  = X + DotRightOfRest * StvHgt   -- 3.2m
+		local x_plus  = X + dot_right_of_rest * StvHgt -- 3.2m 3.2n
 		-- should only raise dot if note on line ...
-		local y_minus = Y + DotAboveNote * StvHgt 
+		local y_minus = Y + dot_above_note * StvHgt    -- 3.2m 3.2n
 		printf("%g %g %g dot", x_plus,y_minus,StvHgt)
 	end
 	if options and option~='' then

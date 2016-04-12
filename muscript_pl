@@ -49,8 +49,8 @@ $Data::Dumper::Terse     = 1;
 $debug = 0;
 if ($debug) {$|=1;}  # so you can 'tail -f' on the output file
 
-$Version               = '3.2m for Perl'; # 64 rest and hds7
-$VersionDate           = '09apr2016';
+$Version               = '3.2n for Perl'; # neater dotted bre and smb rests
+$VersionDate           = '12apr2016';
 no warnings;  # Use of assignment to $[ is deprecated in perl 5.14
 # if it becomes illegal, it may be easier to translate to Lua than to fix
 $[=1; # awk (and a2p) legacy, needed by $Isyst $Ibar and $Istave
@@ -4075,12 +4075,16 @@ sub ps_rest { my ($currentpulse, $symbol, $X) = @_;
 	my $Y = $Ystv + $dy*$StvHgt;
 	my $smallstaveheight = $StvHgt;   # 3.1o
 	if ($currentpulse =~ /-s$/) { $smallstaveheight *= $SmallStemRatio; }
+	my $dot_above_note    = $DotAboveNote;    # 3.2n
+	my $dot_right_of_rest = $DotRightOfRest;  # 3.2n
 	if ($currentpulse =~ /^smb/) {
 		$Y += 0.25 * $StvHgt; $dy += 0.25;  # 4th stave-line
 		printf "%g %g %g smbrest\n",     $X, $Y, $StvHgt;
 		if ($dy>0.2 || $dy <-1.2) {  # 2.7t
 			printf "%g %g %g ledger\n",  $X, $Y, $StvHgt;
 		}
+		$dot_above_note    = 0.0 - $DotAboveNote;  # 3.2n
+		$dot_right_of_rest = $DotRightOfNote;      # 3.2n
 	} elsif ($currentpulse =~ /^min/) {
 		printf "%g %g %g minimrest\n",   $X, $Y, $StvHgt;
 		if ($dy>0.2 || $dy <-1.2) {  # 2.7t
@@ -4092,6 +4096,7 @@ sub ps_rest { my ($currentpulse, $symbol, $X) = @_;
 		printf "%g %g %g quaverrest\n",  $X, $Y, $smallstaveheight;
 	} elsif ($currentpulse =~ /^bre/) {
 		printf "%g %g %g breverest\n",   $X, $Y, $StvHgt;
+		$dot_above_note    = 0.125;   # 3.2n
 	} elsif ($currentpulse =~ /^dsq/) {
 		printf "%g %g %g demisemiquaverrest\n", $X, $Y, $smallstaveheight;
 	} elsif ($currentpulse =~ /^hds/) {
@@ -4101,15 +4106,12 @@ sub ps_rest { my ($currentpulse, $symbol, $X) = @_;
 	}
 	# print the dot, if any
 	if ($currentpulse =~ /\.\.$/) {
-		# should give breverest more space, probably DotRightOfNote
-		my $x_plus  = $X + $DotRightOfRest * $StvHgt;  # 3.2m
-		# should only raise dot if note on line ...
-		my $y_minus = $Y + $DotAboveNote * $StvHgt; 
+		my $x_plus  = $X + $dot_right_of_rest * $StvHgt;  # 3.2n
+		my $y_minus = $Y + $dot_above_note * $StvHgt;     # 3.2n
 		printf ("%g %g %g doubledot\n", $x_plus, $y_minus, $StvHgt);
 	} elsif ($currentpulse =~ /\.$/) {
-		my $x_plus  = $X + $DotRightOfRest * $StvHgt;  # 3.2m
-		# should only raise dot if note on line ...
-		my $y_minus = $Y + $DotAboveNote * $StvHgt; 
+		my $x_plus  = $X + $dot_right_of_rest * $StvHgt;  # 3.2n
+		my $y_minus = $Y + $dot_above_note * $StvHgt;     # 3.2n
 		printf ("%g %g %g dot\n", $x_plus, $y_minus, $StvHgt);
 	}
 	if ($options) {
