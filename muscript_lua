@@ -4943,7 +4943,7 @@ local function interpret_syntax (line)
 		boundingbox(s1,s2); return
 	end
 	if not MIDI and not XmlOpt and not PS_prologAlready then ps_prolog() end
-	s1,s2 = match(line, '^([1-9][0-9]*)%s+systems%s+(.*)$')
+	s1,s2 = match(line, '^([1-9][0-9]*)%s+systems?%s+(.*)$')
 	if s2 then systems(s1,s2); return end
 	s1 = match(line,'^midi%s*(.*)$') ; if s1 then   -- 3.1f
 		if      s1 == 'on'  then Midi_off = false
