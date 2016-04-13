@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2n for Lua5'  -- neater dotted bre and smb rests
-VersionDate  = '12apr2016';
+Version = '3.2o for Lua5'  -- only raise dot if the note is on a line
+VersionDate  = '13apr2016';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -1965,14 +1965,18 @@ local function ps_note (noteref, X, height2cross)
 		if find(CurrentPulseText,'-s$') then
 			sh = sh * SmallNoteRatio
 		end
-		-- should really only raise dot if note is on a line ...
+		-- 3.2o only raise dot if the note is on a line ...
+		local dot_above_note = 0.0  -- 3.2o
+		if math.floor(0.01 + Ytable[noteref['pitch']]*8.0) % 2 > 0.5 then
+			dot_above_note = DotAboveNote*sh
+		end
 		if find(CurrentPulseText,'%.%.') then
-			local x_plus  = X + DotRightOfNote*sh; 
-			local y_minus = Y + DotAboveNote*sh; 
+			local x_plus  = X + DotRightOfNote*sh
+			local y_minus = Y + dot_above_note
 			printf("%g %g %g doubledot", x_plus,y_minus,sh)
 		elseif find(CurrentPulseText,'%.') then
 			local x_plus  = X + DotRightOfNote*sh
-			local y_minus = Y + DotAboveNote*sh
+			local y_minus = Y + dot_above_note
 			printf("%g %g %g dot", x_plus, y_minus, sh)
 		end
 	end
@@ -3233,6 +3237,10 @@ local function newbar (line)
 		Xml['staves'] = '1'
 		xml_timesig(line[1])
 	else 
+		if not Nbars[Isyst] then  -- 3.2n
+			warn_ln('missing "bars" line before the newbar "|" symbol')
+			return false
+		end
 		if Isyst>0.5 and bit32.band(BarType[Isyst][Ibar],2)>0.5 then
 			ps_finish_ties(Xbar[Isyst][Ibar])  -- is :|| or :||:
 		end
@@ -4672,13 +4680,17 @@ local function newstave (line)
 	else
 		-- The spacing of the bar was specified in Nparts parts
 		-- BUG ! if the "|" line after a "N bars " is omitted, nparts = 0 !!
-		if Nparts[Isyst][Ibar] then
+		if  Nparts[Isyst] and Nparts[Isyst][Ibar] then  -- 3.2n
 			CrosPerPart = CrosSoFar / Nparts[Isyst][Ibar]
 		else print_sp(
 			  '% ERROR: no | before stave line, page',PageNum,', sys',Isyst)
 			warn_ln('bad syntax: no | before stave line')
-			Ibar = 1
-			CrosPerPart = 10 -- ugly but legal
+			return false  -- 3.2n  more rigorous than muscript_pl
+			-- Ibar = 1
+			-- Xbar[Isyst]      = {} -- 3.2n
+			-- Nparts[Isyst]    = {} -- 3.2n
+			-- Nparts[Isyst][1] = 1  -- 3.2n
+			-- CrosPerPart = 10 -- ugly but legal
 		end
 		-- so what are the corresponding x positions ?
 		-- NB! Xpart[n] is the left end of part n, but Xbar{s,m} is right end

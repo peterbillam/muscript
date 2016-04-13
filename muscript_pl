@@ -49,8 +49,8 @@ $Data::Dumper::Terse     = 1;
 $debug = 0;
 if ($debug) {$|=1;}  # so you can 'tail -f' on the output file
 
-$Version               = '3.2n for Perl'; # neater dotted bre and smb rests
-$VersionDate           = '12apr2016';
+$Version               = '3.2o for Perl'; # only raise dot if note is on a line
+$VersionDate           = '13apr2016';
 no warnings;  # Use of assignment to $[ is deprecated in perl 5.14
 # if it becomes illegal, it may be easier to translate to Lua than to fix
 $[=1; # awk (and a2p) legacy, needed by $Isyst $Ibar and $Istave
@@ -3171,14 +3171,18 @@ sub ps_note { local ($note_ref, $X, $height2cross_ref) = @_; # $X needs local
 	{
 		my $sh = $StvHgt;
 		if ($currentpulsetext =~ /-s$/) { $sh *= $SmallNoteRatio; }
-		# should really only raise dot if note is on a line ...
+		# 3.2o only raise dot if the note is on a line ...
+		my $dot_above_note = 0.0;  # 3.2o
+		if (int(0.01 + abs(8*$ytable{$note_ref->{pitch}})) % 2 > 0.5) {
+			$dot_above_note = $DotAboveNote*$sh;
+		}
 		if ($currentpulsetext =~ /\.\./) {
 			my $x_plus  = $X + $DotRightOfNote*$sh; 
-			my $y_minus = $Y + $DotAboveNote*$sh; 
+			my $y_minus = $Y + $dot_above_note; 
 			printf ("%g %g %g doubledot\n", $x_plus, $y_minus, $sh);
 		} elsif ($currentpulsetext =~ /\./) {
 			my $x_plus  = $X + $DotRightOfNote*$sh; 
-			my $y_minus = $Y + $DotAboveNote*$sh; 
+			my $y_minus = $Y + $dot_above_note;
 			printf ("%g %g %g dot\n", $x_plus, $y_minus, $sh);
 		}
 	}
