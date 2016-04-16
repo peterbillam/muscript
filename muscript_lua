@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2o for Lua5'  -- only raise dot if the note is on a line
-VersionDate  = '13apr2016';
+Version = '3.2p for Lua5'  -- fixed ps_beam with stemup beams over accidentals
+VersionDate  = '16apr2016';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -64,12 +64,12 @@ OptionDy              = { dot=0.25, tenuto=0.26, upbow=0.43, gs=0.55,
 	blank=0.25, Is=0.35, is=0.33, bs=0.35, rs=0.33, I=0.47, i=0.45,
 	b=0.47, r=0.45, dim=0.0, cre=0.0, ['*']=0.35 }
 MinBeamClearance      = 0.70
-FlatHalfHeight        = 0.10   -- 2.9z; was .2
-SharpHalfHeight       = 0.15
-BeamWidth             = 0.13   -- needed in DATA
+FlatHalfHeight        = 0.42   -- 3.2p
+SharpHalfHeight       = 0.28   -- 3.2p
+BeamWidth             = 0.13   -- used in ps_beam and in DATA
 BeamSpacing           = 0.22
 MaxBeamStub           = 0.35
-BeamGapMult           = 0.5   -- 2.9t
+BeamGapMult           = 0.85   -- 3.2p
 TailSpacing           = 0.24
 MaxBeamGradient       = 0.45   -- dimensionless; dy/dx
 SegnoHeight           = 0.90
@@ -2128,6 +2128,7 @@ local function ps_beam (beamupordown) -- usage: &ps_beam(@BeamUp)
 	local min_beam_clearance = MinBeamClearance   * StvHgt
 	local sharp_half_height  = SharpHalfHeight    * StvHgt
 	local flat_half_height   = FlatHalfHeight     * StvHgt
+	local beam_width         = BeamWidth          * StvHgt
 	local Direction, x,ylowblob,yhighblob,duration,direction,accidental
 	local durations={}; local xes={};  local ylowblobs={}; local yhighblobs={}
 	local accidentals={}; local optionses={}
@@ -2166,9 +2167,9 @@ local function ps_beam (beamupordown) -- usage: &ps_beam(@BeamUp)
 		table.insert(accidentals, accidental)
 		table.insert(optionses,   options)
 	end
-	local smallstaveheight = StvHgt * smallness;   -- for speed
-	local stem_length   = StemLength*smallstaveheight;
-	local max_beam_stub = MaxBeamStub*smallstaveheight;
+	local smallstaveheight = StvHgt * smallness   -- for speed
+	local stem_length      = StemLength*smallstaveheight
+	local max_beam_stub    = MaxBeamStub*smallstaveheight
 	local x1,xn, ylowblob1,ylowblobn, yhighblob1,yhighblobn, y1,yn
 	x1         = xes[1];         xn         = xes[n]
 	ylowblob1  = ylowblobs[1] ;  ylowblobn  = ylowblobs[n]
@@ -2225,19 +2226,30 @@ local function ps_beam (beamupordown) -- usage: &ps_beam(@BeamUp)
 				end
 			end
 		end
-		-- raise beam if any notes are too high ... 2.9v
+		-- raise beam if any notes are too high ... 2.9v 3.2p
 		dy = yn - y1 ;  dydx = dy / dx
-		for i = 1,n do
+		local half_a_space = 0.125*StvHgt
+		for i = 2,n do  -- 3.2 shouldn't  1,n  really be  2,n  ?
 			x = xes[i]; y = y1 + dydx * (x-x1)
 			ymin = yhighblobs[i] + min_beam_clearance +
-			  BeamGapMult * gap * (ps_tails_or_beams(durations[i]) - 1)
+			  0.6 * gap * (ps_tails_or_beams(durations[i]) - 1) -- 3.2p
 			if y < ymin then y1 = y1 + ymin - y ; yn = yn + ymin - y end
-			if accidentals[i] ~= '-' then
+			if accidentals[i] ~= '-' then  -- we have an accidental...
 				x = xes[i] - accidental_before_note
 				y = y1 + dydx * (x-x1)
-				-- 2.9z should detect if accidental is flat or sharp...
-				ymin = yhighblobs[i] + min_beam_clearance + flat_half_height
-				if y < ymin then y1 = y1 + ymin - y ;  yn = yn + ymin - y end
+				-- detect if accidental is flat or sharp... 2.9z 3.2p
+				local acc_half_height = sharp_half_height
+				if find(accidentals[i], 'b') then -- 3.2p
+					acc_half_height = flat_half_height
+				end
+				-- detect if accidental touches the lowest beam 3.2p
+-- it's not as easy as durations[i] ! ; eg i=2 with  8 [G# 32 A B c d]
+				local y_clearance = y - acc_half_height - yhighblobs[i] -
+				  BeamGapMult * gap * (ps_tails_or_beams(durations[i]) - 1) -
+				  beam_width - half_a_space  -- 3.2p
+				if y_clearance < 0 then
+					y1 = y1 - y_clearance ; yn = yn - y_clearance
+				end 
 			end
 		end
 		-- print the first (qua) beam anyway ...
@@ -2966,11 +2978,13 @@ local function changestave (stavestr)
 			  ' staves')
 			warn_ln("stavenumber "..tostring(stave)..' too big for system '..
 			  tostring(Isyst))
+			os.exit(1)
 			stave = Nstaves[Isyst]
 		elseif stave < 1 then
 			print("% ERROR: stave = "..tostring(stave)..
 			  ", should be at least one")
 			warn_ln("stavenumber "..tostring(stave).." too small")
+			os.exit(1)
 			stave = 1
 		end
 		Ystv      = Ystave[Isyst][Istave]      -- timesaver

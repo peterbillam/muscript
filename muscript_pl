@@ -49,8 +49,8 @@ $Data::Dumper::Terse     = 1;
 $debug = 0;
 if ($debug) {$|=1;}  # so you can 'tail -f' on the output file
 
-$Version               = '3.2o for Perl'; # only raise dot if note is on a line
-$VersionDate           = '13apr2016';
+$Version      = '3.2p for Perl'; # fix ps_beam stemup beams over accidentals
+$VersionDate  = '16apr2016';
 no warnings;  # Use of assignment to $[ is deprecated in perl 5.14
 # if it becomes illegal, it may be easier to translate to Lua than to fix
 $[=1; # awk (and a2p) legacy, needed by $Isyst $Ibar and $Istave
@@ -100,13 +100,13 @@ $OptionDy              = 0.35;
 	blank=>0.25, Is=>0.35, is=>0.33, bs=>0.35, rs=>0.33, I=>0.47, i=>0.45,
 	b=>0.47, r=>0.45, dim=>0.0, cre=>0.0, '*'=>0.35); # should be in initialise
 $MinBeamClearance      = 0.70;
-$FlatHalfHeight        = 0.10; # 2.9z; was .2
-$SharpHalfHeight       = 0.15;
-$BeamWidth             = 0.13; # gives -w warning, but needed in DATA
-$BeamWidth             += 0.0; # avoids warning, I hate being forced to this
+$FlatHalfHeight        = 0.42; # 3.2p
+$SharpHalfHeight       = 0.28; # 3.2p
+$BeamWidth             = 0.13; # used in ps_beam and in DATA
+# $BeamWidth           += 0.0; # avoids warning, I hate being forced to this
 $BeamSpacing           = 0.22;
 $MaxBeamStub           = 0.35;
-$BeamGapMult           = 0.5;  # 2.9t
+$BeamGapMult           = 0.85; # 3.2p
 $TailSpacing           = 0.24;
 $MaxBeamGradient       = 0.45; # dimensionless; dy/dx
 $SegnoHeight           = 0.90;
@@ -3541,9 +3541,10 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 	my $min_beam_clearance = $MinBeamClearance * $StvHgt;
 	my $sharp_half_height  = $SharpHalfHeight  * $StvHgt;
 	my $flat_half_height   = $FlatHalfHeight   * $StvHgt;
+	my $beam_width         = $BeamWidth        * $StvHgt;
 
 	my ($x,$ylowblob,$yhighblob,$duration,$direction,$accidental,$options);
-	my (@duration, $Direction, @x, @ylowblob, @yhighblob, @accidental, $n);
+	my (@duration, $Direction, @x, @ylowblobs, @yhighblobs, @accidental, $n);
 	my (@options);
 	$n = scalar @_; return unless $n;
 	if ($n < 2) {
@@ -3572,19 +3573,19 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 			$Direction = $direction;
 		}
 		push (@x, $x);
-		push (@ylowblob, $ylowblob);
-		push (@yhighblob, $yhighblob);
+		push (@ylowblobs, $ylowblob);
+		push (@yhighblobs, $yhighblob);
 		push (@duration, $duration);
 		push (@accidental, $accidental);  # $note_ref->{accidental} ?
 		push (@options, $options);
 	}
-	my $smallstaveheight = $StvHgt * $smallness;   # for speed
-	my $stem_length   = $StemLength*$smallstaveheight;
-	my $max_beam_stub = $MaxBeamStub*$smallstaveheight;
+	my $smallstaveheight = $StvHgt  * $smallness;   # for speed
+	my $stem_length   = $StemLength * $smallstaveheight;
+	my $max_beam_stub = $MaxBeamStub* $smallstaveheight;
 	my ($x1,$xn, $ylowblob1,$ylowblobn, $yhighblob1,$yhighblobn, $y1,$yn);
 	$x1         = $x[$[];         $xn         = $x[$[+$n-1];
-	$ylowblob1  = $ylowblob[$[];  $ylowblobn  = $ylowblob[$[+$n-1];
-	$yhighblob1 = $yhighblob[$[]; $yhighblobn = $yhighblob[$[+$n-1];
+	$ylowblob1  = $ylowblobs[$[];  $ylowblobn  = $ylowblobs[$[+$n-1];
+	$yhighblob1 = $yhighblobs[$[]; $yhighblobn = $yhighblobs[$[+$n-1];
 
 	if ($Direction =~ /^up/) {
 		$y1 = $yhighblob1 + $stem_length;
@@ -3619,18 +3620,18 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 		$too_high = 0;
 		foreach $i (($[+1) .. ($[+$n-2)) {
 			$x = $x[$i]; $y = $y1 + $dydx * ($x-$x1);
-			$ymin = $yhighblob[$i] + $min_beam_clearance
+			$ymin = $yhighblobs[$i] + $min_beam_clearance
 			 + $BeamGapMult * $gap * (ps_tails_or_beams($duration[$i])-1);
 			if ($y < $ymin) { $too_high = 1; last; }
 			if ($accidental[$i] ne '-') {
 				$x = $x[$i] - $accidental_before_note;
 				$y = $y1 + $dydx * ($x-$x1);
-				$ymin = $yhighblob[$i]+$min_beam_clearance+$sharp_half_height;
+				$ymin = $yhighblobs[$i]+$min_beam_clearance+$sharp_half_height;
 				if ($y < $ymin) { $too_high = 1; last; }
 			}
 		}
 		if ($too_high && $n>2) {
-			my $best_fit_gradient = ps_best_fit_gradient(\@x,\@yhighblob);
+			my $best_fit_gradient = ps_best_fit_gradient(\@x,\@yhighblobs);
 			if ((abs $best_fit_gradient) < $MaxBeamGradient) {
 				if ($best_fit_gradient > 0.0) {	# positive gradient
 					$ymin = $yn - $best_fit_gradient * ($xn-$x1);
@@ -3642,19 +3643,30 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 			}
 		}
 
-		# raise beam if any notes are too high ... 2.9v
+		# raise beam if any notes are too high ... 2.9v 3.2p
 		$dy = $yn - $y1; $dydx = $dy / $dx;
-		foreach $i ($[ .. ($[+$n-1)) {
+		my $half_a_space = 0.125*$StvHgt;
+		foreach $i ($[ .. ($[+$n-1)) {  # 3.2 shouldn't $[ really be $[+1 ?
 			$x = $x[$i]; $y = $y1 + $dydx * ($x-$x1);
-			$ymin = $yhighblob[$i] + $min_beam_clearance
-			 + $BeamGapMult * $gap * (ps_tails_or_beams($duration[$i])-1);
+			$ymin = $yhighblobs[$i] + $min_beam_clearance
+			 + 0.6 * $gap * (ps_tails_or_beams($duration[$i])-1); # 3.2p
 			if ($y < $ymin) { $y1 += $ymin-$y; $yn += $ymin-$y; }
-			if ($accidental[$i] ne '-') {
+			if ($accidental[$i] ne '-') {   # we have an accidental...
 				$x = $x[$i] - $accidental_before_note;
 				$y = $y1 + $dydx * ($x-$x1);
-				# 2.9z should detect if accidental is flat or sharp...
-				$ymin = $yhighblob[$i]+$min_beam_clearance+$flat_half_height;
-				if ($y < $ymin) { $y1 += $ymin-$y; $yn += $ymin-$y; }
+				# detect if accidental is flat or sharp... 2.9z 3.2p
+				my $acc_half_height = $sharp_half_height;
+				if ($accidental[$i] =~ /b/) {   # 3.2p
+					$acc_half_height = $flat_half_height;
+				}
+				# detect if accidental touches the lowest beam 3.2p
+# it's not as easy as duration[i] ! ; eg i=2 with  8 [G# 32 A B c d]
+				my $y_clearance = $y - $acc_half_height - $yhighblobs[$i]
+				  - $BeamGapMult*$gap *(ps_tails_or_beams($duration[$i])-1)
+				  - $beam_width - $half_a_space;  # 3.2p
+				if ($y_clearance < 0) {
+					$y1 = $y1 - $y_clearance ; $yn = $yn - $y_clearance;
+				}
 			}
 		}
 
@@ -3707,9 +3719,9 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 		foreach $i (($[+1) .. ($[+$n-2)) {
 			$x = $x[$i]; $y = $y1 + $dy * ($x-$x1) / $dx;
 			printf "%g %g %g %g notestem\n",
-			 $x, $y, $ylowblob[$i], $StvHgt;
+			 $x, $y, $ylowblobs[$i], $StvHgt;
 			ps_note_options($x - $BlackBlobHalfWidth*$StvHgt,
-			 $ylowblob[$i]-($OptionClearance+$WhiteBlobHalfHeight)*$StvHgt,
+			 $ylowblobs[$i]-($OptionClearance+$WhiteBlobHalfHeight)*$StvHgt,
 			 $y + ($OptionClearance+$WhiteBlobHalfHeight) * $StvHgt,
 			 'up', $options[$i]);   # 2.9d
 		}
@@ -3753,18 +3765,18 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 		$too_low = 0;
 		foreach $i (($[+1) .. ($[+$n-2)) {
 			$x = $x[$i]; $y = $y1 + $dy * ($x-$x1) / $dx;
-			$ymax = $ylowblob[$i] - $min_beam_clearance
+			$ymax = $ylowblobs[$i] - $min_beam_clearance
 			 - $BeamGapMult * $gap * (ps_tails_or_beams($duration[$i])-1);
 			if ($y > $ymax) { $too_low = 1; last; }
 			if ($accidental[$i] ne '-') {
 				$x = $x[$i] - $accidental_before_note;
 				$y = $y1 + $dydx * ($x-$x1);
-				$ymax = $ylowblob[$i]-$min_beam_clearance+$sharp_half_height;
+				$ymax = $ylowblobs[$i]-$min_beam_clearance+$sharp_half_height;
 				if ($y > $ymax) { $too_low = 1; last; }
 			}
 		}
 		if ($too_low && $n>2) {
-			my $best_fit_gradient = ps_best_fit_gradient(\@x,\@ylowblob);
+			my $best_fit_gradient = ps_best_fit_gradient(\@x,\@ylowblobs);
 			if ((abs $best_fit_gradient) < $MaxBeamGradient) {
 				if ($best_fit_gradient > 0.0) {	# positive gradient
 					$ymax = $y1 + $best_fit_gradient * ($xn-$x1);
@@ -3780,13 +3792,13 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 		$dy = $yn - $y1; $dydx = $dy / $dx;
 		foreach $i ($[ .. ($[+$n-1)) {
 			$x = $x[$i]; $y = $y1 + $dydx * ($x-$x1);
-			$ymax = $ylowblob[$i] - $min_beam_clearance
+			$ymax = $ylowblobs[$i] - $min_beam_clearance
 			 - $BeamGapMult * $gap * (ps_tails_or_beams($duration[$i])-1);
 			if ($y > $ymax) { $y1 -= $y-$ymax; $yn -= $y-$ymax; }
 			if ($accidental[$i] ne '-') {
 				$x = $x[$i] - $accidental_before_note;
 				$y = $y1 + $dydx * ($x-$x1);
-				$ymax = $ylowblob[$i]-$min_beam_clearance+$sharp_half_height;
+				$ymax = $ylowblobs[$i]-$min_beam_clearance+$sharp_half_height;
 				if ($y > $ymax) { $y1 -= $y-$ymax; $yn -= $y-$ymax; }
 			}
 		}
@@ -3840,10 +3852,10 @@ sub ps_beam { # usage: &ps_beam(@BeamUp)
 		foreach $i (($[+1) .. ($[+$n-2)) {
 			$x = $x[$i]; $y = $y1 + $dy * ($x - $x1) / $dx;
 			printf "%g %g %g %g notestem\n",
-			 $x, $y, $yhighblob[$i], $StvHgt;
+			 $x, $y, $yhighblobs[$i], $StvHgt;
 			ps_note_options($x + $BlackBlobHalfWidth*$StvHgt,
 			 $y - ($OptionClearance+$WhiteBlobHalfHeight) * $StvHgt,
-		 $yhighblob[$i]+($OptionClearance+$WhiteBlobHalfHeight)*$StvHgt,
+		 $yhighblobs[$i]+($OptionClearance+$WhiteBlobHalfHeight)*$StvHgt,
 			 'down', $options[$i]);   # 2.9d
 		}
 		printf "%g %g %g %g notestem\n", $xn, $yn, $yhighblobn, $StvHgt;
