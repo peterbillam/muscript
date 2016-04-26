@@ -4248,10 +4248,10 @@ __END__
 %%Creator: muscript version $Version
 %%EndComments
 %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% This music was typeset by muscript version $Version. Muscript was written %
-% by Peter Billam, and is available from http://www.pjb.com.au/muscript %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%     This music was typeset by muscript,  version: $Version.     %
+% Muscript was written by Peter Billam.  See:  www.pjb.com.au/muscript %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %
 %%BeginProlog
 %%BeginResource: procset muscript
