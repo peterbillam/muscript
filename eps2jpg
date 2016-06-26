@@ -1,0 +1,153 @@
+#! /usr/bin/perl
+#########################################################################
+#        This Perl script is Copyright (c) 2016, Peter J Billam         #
+#                          www.pjb.com.au                               #
+#                                                                       #
+#     This script is free software; you can redistribute it and/or      #
+#            modify it under the same terms as Perl itself.             #
+#########################################################################
+# This sometimes also works (would be good to suss out exactly when):
+#    convert file.eps file.jpg
+#    cat file.eps | convert - file.jpg
+
+# 20160611  works as eps2png producing png files with transparent backgrounds
+
+my $Version       = '1.1';
+my $VersionDate   = '17jun2016';
+my $gs            = "/usr/bin/gs";
+my $tmp           = "/tmp/eps2jpg.$$";
+my $dev           = 'jpeg';
+my $res           = 72;   # default points-per-inch
+
+if ($0 =~/eps2png$/) {
+	$tmp      = "/tmp/eps2png.$$";
+	$dev      = "png16m";
+}
+while ($ARGV[$[] =~ /^-([a-z])/) {
+	if ($1 eq 'v')      { shift;
+		my $n = $0; $n =~ s{^.*/([^/]+)$}{$1};
+		print "$n version $Version $VersionDate\n";
+		exit 0;
+	} elsif ($1 eq 't') { $dev = "pngalpha";     shift;
+	} elsif ($ARGV[$[] =~ /^-r(\d+)$/) { $res = 0 + $1;  shift;
+	} else {
+		print "usage:\n";  my $synopsis = 0;
+		while (<DATA>) {
+			if (/^=head1 SYNOPSIS/)     { $synopsis = 1; next; }
+			if ($synopsis && /^=head1/) { last; }
+			if ($synopsis && /\S/)      { s/^\s*/   /; warn $_; next; }
+		}
+		exit 0;
+	}
+}
+
+sub round { my $x = $_[$[];
+    if ($x > 0.0) { return int ($x + 0.5); }
+    if ($x < 0.0) { return int ($x - 0.5); }
+    return 0;
+}
+
+my (@eps, $x, $y, $xl, $xr, $yb, $yt);
+while (<>) {
+	push @eps, $_;
+	if (/^%%BoundingBox:?\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/) {
+		$xl=$1; $yb=$2; $xr=$3; $yt=$4; last;
+	}
+}
+if ($xl > 0 || $yb > 0) {
+	warn "eps2jpg: BoundingBox should start at x=0 y=0, not x=$xl y=$yb\n";
+}
+$x = $xr - $xl; $y = $yt - $yb;
+if ($res != 72) { $x = round($x*$res/72);  $y = round($y*$res/72); }
+
+if (!$x || !$y) { die "sorry, could not find %%BoundingBox line in input\n"; }
+
+$SIG{INT} = sub { unlink $tmp; };
+
+if (!open(P,"|$gs -sDEVICE=$dev -sOutputFile=$tmp -q -g${x}x${y} -r$res -")){
+	die "sorry, can't run $gs: $!\n";
+}
+print P @eps; while (<>) { print P; } close P;
+
+if (! open (P, $tmp)) { die "can't open $tmp for read: $!\n"; }
+while (<P>) { print; }
+close P;
+unlink $tmp;
+
+__END__
+
+# POD Documentation (perldoc or pod2html this file)
+
+=pod
+
+=head1 NAME
+
+eps2jpg, eps2png - Perl script to convert EPS to JPG or PNG
+
+=head1 SYNOPSIS
+
+ eps2jpg  something.eps   > something.jpg  # white background
+ eps2png  something.eps   > something.png  # white background
+ eps2png -t something.eps > something.png  # transparent background
+ eps2png -r144 something.eps > something.png  # higher resolution
+ perldoc eps2jpg        # read the manual :-)
+ perldoc eps2png        # read the manual :-)
+
+=head1 DESCRIPTION
+
+This script 
+extracts the I<%%BoundingBox 0 0 x y> specification from the EPS file
+to feed to the I<-g> argument of I<ghostscript>
+
+Under the name I<eps2jpg>, it uses the I<gs> output-device I<jpeg>
+
+Under the name I<eps2png>, it uses by default I<png16m>,
+except with the B<-t> (transparent) option when it uses I<pngalpha>
+
+
+=head1 OPTIONS
+
+=over 3
+
+=item I<-t>
+
+When used with I<eps2png> this sets the I<gs> output-device to I<pngalpha>
+so that the background,
+i.e. areas unwritten in the I<eps>, will be transparent.
+
+=item I<-r144>
+
+The -r option is passed to I<ghostscript>
+where it sets the resolution, in pixels-per-inch,
+and adjusts the I<-g> argument of I<ghostscript> accordingly.
+The default is B<-r72> meaning one pixel per point, meaning the
+output size in pixels is the same as the given I<BoundingBox> size.
+
+The above example B<-r144> sets two pixels-per-point.
+
+=item I<-h>
+
+Prints the above SYNOPSIS.
+
+=item I<-v>
+
+Prints the version number.
+
+=back
+
+=head1 AUTHOR
+
+Peter J Billam  http://www.pjb.com.au/comp/contact.html
+
+=head1 CHANGES
+
+ 20160617 -r144 option sets resolution in pixels-per-inch
+ 20160616 -t option sets transparent background for png
+
+
+=head1 SEE ALSO
+
+gs(1), http://www.pjb.com.au/, perl(1).
+
+=cut
+
