@@ -638,8 +638,8 @@ if not MIDI and not XmlOpt then PS_Prolog = [[
 
 /barnumber {	% usage: x y staveheight (string) barnumber
 	/s exch def /staveheight exch def /y exch def /x exch def
-	gsave Helvetica-Bold findfont  staveheight 0.6 mul scalefont setfont
-	0.8 setgray x s stringwidth pop 0.5 mul sub  y moveto
+	gsave /Helvetica-Bold findfont  staveheight 0.6 mul scalefont setfont
+	0.2 setgray x s stringwidth pop 0.5 mul sub  y moveto
 	s show grestore
 } bind def
 
