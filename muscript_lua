@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2p for Lua5'  -- fixed ps_beam with stemup beams over accidentals
-VersionDate  = '16apr2016';
+Version = '3.2q for Lua5'  -- setting multi-line variables handles empty lines
+VersionDate  = '11jul2016';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -4409,14 +4409,14 @@ function substitute (text, infinite_depth)
 			while #raw_lines > 0.5 do
 				local raw_line = table.remove(raw_lines, 1)
 				-- warn('substitute: raw_line=',dump(raw_line))
-				-- if not raw_line or raw_line=='' then break end --20160710??
-				if not raw_line then break end -- 20160710  superfluous ?
+				-- if not raw_line or raw_line=='' then break end -- ?? 3.2q
+				if not raw_line then break end -- 3.2q  superfluous ?
 				if find(raw_line, VariableSetRE_f) then
 					table.insert(raw_lines, 1, raw_line)
 					local n = set_var(raw_lines, 1, infinite_depth)
 					for i = n,#raw_lines do raw_lines[i-n+1]=raw_lines[i] end
 					raw_lines[#raw_lines-n+2] = nil
-				elseif raw_line ~= '' then   -- 20160710
+				elseif raw_line ~= '' then   -- 3.2q
 					for i,v in ipairs(substitute(raw_line,infinite_depth)) do
 						subst_lines[#subst_lines+1] = v
 					end
