@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2q for Lua5'  -- setting multi-line variables handles empty lines
-VersionDate  = '11jul2016';
+Version = '3.2r for Lua5'  -- fixed midi global transpose
+VersionDate  = '17aug2016';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -3401,11 +3401,11 @@ local function midi_global (s)
 			if str['vib']     then midi_cc_100(cha,77,str['vib})']) end
 			if str['delay']   then midi_cc_100(cha,78,str['delay']) end
 			if str['chorus']  then midi_cc_100(cha,93,str['chorus']) end
-			if str['tra']       then
-				Cha2transpose[cha] = tonumber(str['tra'])
+			if str['tra']       then  -- 3.2r
+				Cha2transpose[tonumber(cha)] = tonumber(str['tra'])
 			end
-			if str['transpose'] then   -- 3.1u
-				Cha2transpose[cha] = tonumber(str['transpose'])
+			if str['transpose'] then   -- 3.1u 3.2r
+				Cha2transpose[tonumber(cha)] = tonumber(str['transpose'])
 			end
 		elseif str['pause'] then
 			if MidiTempo then  -- uSec per crochet
