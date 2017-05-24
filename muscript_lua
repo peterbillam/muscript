@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2r for Lua5'  -- fixed midi global transpose
-VersionDate  = '17aug2016';
+Version = '3.2t for Lua5'  -- fixed -gs option under -xml
+VersionDate  = '08may2017';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -3950,8 +3950,8 @@ local function xml_text (text_type, size, vertpos, text)
 	XmlCache[#XmlCache+1] =
 	  'font-size="'..font_size..'" font-weight="'..font_weight..'">'
 	XmlCache[#XmlCache+1] = text..'</words>\n'..t4..'</direction-type>\n'
-	if Istave > 0.5 then XmlCache[#XmlCache+1] =
-		 t4..'<staff>'..istave..'</staff>\n'..t3..'</direction>\n'
+	if Istave and Istave > 0.5 then XmlCache[#XmlCache+1] =
+		 t4..'<staff>'..Istave..'</staff>\n'..t3..'</direction>\n' -- 3.2s
 	else 
 		XmlCache[#XmlCache+1] = t4..'<staff>1</staff>\n'..t3..'</direction>\n'
 	end
@@ -4102,7 +4102,7 @@ function xml_event (symbols)
 						  '<trill-mark placement="'..updown..'"/>'
 					end
 				elseif option == 'blank' or option == '' then  -- 2.9c
-				elseif find(option,'/^gs%d') then  -- 3.1y
+				elseif find(option,'^gs%d') then  -- 3.1y 3.2t
 					-- BUG: what about -gs ?
 					-- See technical in ~/musicxml/musicxml3/note.dtd
 					-- but guitar-strings are not printed like violin-strings!
@@ -4619,6 +4619,7 @@ end
 
 local function newstave (line)
 	local newstave,remainder = match(line, "^(%d+[,']?)(.*)$")
+	-- 20161216 BUG newstave can be nil, eg ==1'
 	local tmp = gsub(newstave, "[,']", "")
 	Istave = tonumber(tmp)   -- why not Istave directly ?
 	if not Stave2channels[Istave] then Stave2channels[Istave] = {} end
