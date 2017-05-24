@@ -9,6 +9,11 @@
 # This sometimes also works (would be good to suss out exactly when):
 #    convert file.eps file.jpg
 #    cat file.eps | convert - file.jpg
+#
+# https://imageoptim.com/versions.html
+#   Zopfli, PNGOUT — the most efficient lossless PNG compressors.
+# ~> aptitude search zopfli
+# i   zopfli      - zlib (gzip, deflate) compatible compressor
 
 # 20160611  works as eps2png producing png files with transparent backgrounds
 
