@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2u for Lua5'  -- #M and #P lines work in multi-line variables
-VersionDate  = '08may2017';
+Version = '3.2w for Lua5'  -- newstave defends against bad stave line
+VersionDate  = '04jun2017';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -802,6 +802,7 @@ end
 function warn_ln(...) warn(' line ',LineNum,': ', ...) end
 function warning(...) warn('warning: ', ...) end
 function die(...) warn(...) ;  os.exit(1) end
+function die_ln(...) warn_ln(...) ;  os.exit(1) end   -- 3.2w
 function dump(x)
 	local function tost(x)
 		if type(x) == 'table' then return 'table['..tostring(#x)..']' end
@@ -1246,6 +1247,9 @@ local function systems (nsystems, sizes)
 			local stavesandgaps = split(word, '-', 9999)
 			for i,v in ipairs(stavesandgaps) do
 				local staveorgap = tonumber(v)
+				if not staveorgap then   -- 3.2v
+					die_ln('missing stave number ',isyst)
+				end
 				totsyswidth = totsyswidth + staveorgap
 				syswidth    = syswidth + staveorgap
 				if isastave then
@@ -2978,13 +2982,13 @@ local function changestave (stavestr)
 			  ' staves')
 			warn_ln("stavenumber "..tostring(stave)..' too big for system '..
 			  tostring(Isyst))
-			os.exit(1)
+			-- os.exit(1)  -- commented out 3.2w
 			stave = Nstaves[Isyst]
 		elseif stave < 1 then
 			print("% ERROR: stave = "..tostring(stave)..
 			  ", should be at least one")
 			warn_ln("stavenumber "..tostring(stave).." too small")
-			os.exit(1)
+			-- os.exit(1)  -- commented out 3.2w
 			stave = 1
 		end
 		Ystv      = Ystave[Isyst][Istave]      -- timesaver
@@ -4634,9 +4638,9 @@ end
 
 local function newstave (line)
 	local newstave,remainder = match(line, "^(%d+[,']?)(.*)$")
-	-- 20161216 BUG newstave can be nil, eg ==1'
+	if not newstave then die_ln("incorrect stave line\n  ="..line) end -- 3.2w
 	local tmp = gsub(newstave, "[,']", "")
-	Istave = tonumber(tmp)   -- why not Istave directly ?
+	Istave = tonumber(tmp)
 	if not Stave2channels[Istave] then Stave2channels[Istave] = {} end
 	local maxstvhgt = MaxStaveHeight[Isyst] -- for speed ...
 	if not PrePro and not changestave(newstave) then return false end
