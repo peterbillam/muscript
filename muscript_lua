@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2w for Lua5'  -- newstave defends against bad stave line
-VersionDate  = '04jun2017';
+Version = '3.2x for Lua5'  -- defends against nil Ytable lookup
+VersionDate  = '08jun2017';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -2543,8 +2543,13 @@ local function ps_event (symbols)
 						stemdown_rightshift = noteref['rightshift']
 					end
 					if noteref['cross'] then   -- 2.8p, 3.1j
-						local height = round( 8*Ytable[noteref['pitch']] )
-						height2cross[height] = 1
+						local y = Ytable[noteref['pitch']]  -- 3.2x
+						if y then
+							local height = round(8 * y)
+							height2cross[height] = 1
+						else
+							warn_ln('unrecognised pitch: ',pitch)
+						end
 					end
 					if CurrentPulse < shortestdown then
 						shortestdown     = CurrentPulse
