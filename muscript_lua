@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2x for Lua5'  -- defends against nil Ytable lookup
-VersionDate  = '08jun2017';
+Version = '3.2y for Lua5'  -- defends against missing bar-spacing
+VersionDate  = '11jul2017';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -2198,6 +2198,9 @@ local function ps_beam (beamupordown) -- usage: &ps_beam(@BeamUp)
 			if y1 < ymin then y1 = ymin end
 		else	-- negative gradient
 			ymin = y1 - MaxBeamGradient * (xn-x1)
+-- if the bar-spacing is blank, then:
+-- attempt to perform arithmetic on local 'xn' (a string value)
+ -- 3.2y 20170711
 			if yn < ymin then yn = ymin end
 		end
 		-- check if any intermediate notes are too high ...
@@ -2942,8 +2945,9 @@ local function bars (nbars, str) -- eg. $str='| 4.5 | 2 3 | 4 ||'
 			local tok = tonumber(tokens[itoken])
 			if not tok or tok == 0 then
 			warn_ln("bars: '",tokens[itoken],"' should be numeric and nonzero")
-				Nparts[Isyst][ibar] = Nparts[Isyst][ibar] - 1
-				itoken = itoken + 1
+				-- 3.2y Nparts[Isyst][ibar] = Nparts[Isyst][ibar] - 1
+				tok = 1 -- 3.2y 20170711
+				-- itoken = itoken + 1
 			end
 			PartShare[ibar][ipart] = tok
 			Proportion[ibar] = Proportion[ibar] + tok
