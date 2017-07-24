@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.2y for Lua5'  -- defends against missing bar-spacing
-VersionDate  = '11jul2017';
+Version = '3.2z for Lua5'  -- defends against missing bars-spacing
+VersionDate  = '24jul2017';
 
 --require 'DataDumper'
 local concat = table.concat
@@ -2782,7 +2782,7 @@ local function ps_text (fonttype, fontsize, vertpos, text)
 	local staveheight = StvHgt -- can be locally changed
 	if not vertpos or vertpos == '' then vertpos = TextBelowStave end
 	if Istave == 0 then   -- above the top stave in the system
-		staveheight = StaveHeight[Isyst][1]
+		staveheight = StaveHeight[Isyst][1] or 0  -- 3.2z 20170724
 		ytext = Ystave[Isyst][1] + vertpos*staveheight
 		size  = TextSize * staveheight
 	elseif Istave < Nstaves[Isyst] then  -- text lies between staves
@@ -2985,6 +2985,11 @@ local function changestave (stavestr)
 	local stave = match(tostring(stavestr), "^(%d+)")
 	stave = tonumber(stave)
 	if not MIDI and not XmlOpt then
+		if not Nstaves[Isyst] then
+			Nstaves[Isyst] = 0
+			Ystave[Isyst] = {}
+			StaveHeight[Isyst] = {}
+		end  -- 3.2z 20170724
 		if stave > Nstaves[Isyst] then
 			print("% ERROR: stave = "..tostring(stave)..', but system '..
 			  tostring(Isyst)..' only has '..tostring(Nstaves[stave])..
