@@ -8,8 +8,8 @@
 --  This script is free software; you can redistribute it and/or   --
 --         modify it under the same terms as Lua5 itself.          --
 ---------------------------------------------------------------------
-Version = '3.3c for Lua5'  -- # tripledotted rhythms work
-VersionDate  = '25jan2018'
+Version = '3.3d for Lua5'  -- # quadruplet rhythms work in xml
+VersionDate  = '09feb2018'
 
 --require 'DataDumper'
 local concat = table.concat
@@ -1000,6 +1000,7 @@ function initialise ()
 		}
 		local a = {} ; for k,v in pairs(XmlDuration) do
 			a[k..'3'] = v
+			a[k..'4'] = v  -- 3.3d
 		end
 		for k,v in pairs(a) do XmlDuration[k]=v end
 		a = {} ; for k,v in pairs(XmlDuration) do
@@ -3695,7 +3696,9 @@ local function midi_event (symbols)
 			end
 		elseif is_note then
 			local noteref    = parse_note(symbol)
+			if not noteref then return end  -- 20180202
 			local pitch      = noteref['pitch']
+			if not pitch   then return end  -- 20180202
 			local accidental = noteref['accidental']
 			local options    = noteref['options']
 			-- 3.1s:
