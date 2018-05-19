@@ -117,6 +117,7 @@ while (@Stack) {  # the main loop through the input-file
     }
 	# divide the file into pages
 	if ($line =~ /^\s*\d+\s+systems/) {
+	# warn(" systems line seen at line $LineNum\n");
 		if (@ThisPage) { page2jpgs(@ThisPage); }  # get rid of previous page
 		@ThisPage = ($line);                      # start new one
 	} else {

@@ -26,6 +26,7 @@ my $res           = 72;   # default points-per-inch
 
 if ($0 =~/eps2png$/) {
 	$tmp      = "/tmp/eps2png.$$";
+	# https://www.ghostscript.com/doc/9.21/Devices.htm#PNG
 	$dev      = "png16m";
 }
 while ($ARGV[$[] =~ /^-([a-z])/) {
