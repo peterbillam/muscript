@@ -7,8 +7,8 @@
 #     This script is free software; you can redistribute it and/or      #
 #            modify it under the same terms as Perl itself.             #
 #########################################################################
-my $Version       = '1.9'; # add -r option for some reverb
-my $VersionDate   = '20may2018';
+my $Version       = '2.0';  # use either normalize or normalize-audio
+my $VersionDate   = '22may2018';
 
 use File::Copy();
 my $TmpDir        = "/tmp/muscript2video.$$";
@@ -36,7 +36,7 @@ my $Avconv        = which('avconv');     # 1.7
 my $Fluadity      = which('fluadity');   # 1.8
 my $Timidity      = which('timidity');   # 1.8
 my $Reverb        = 0;  # 1.9 for the -r option
-# should also test for normalize, normalize-audio
+my $Normalize     = which('normalize') || which('normalize-audio');
 
 while ($ARGV[$[] =~ /^-([a-z])/) {
 	if ($1 eq 'v')      { shift;
@@ -62,6 +62,9 @@ if (!$Mencoder and !$Ffmpeg and !$Avconv) {
 }
 if (!$Fluadity and !$Timidity) {   # 1.8
 	die(" Sorry, can't find fluadity or timidity in your \$PATH\n");
+}
+if (!$Normalize) {   # 2.0
+	die(" Sorry, can't find normalize or normalize-audio in your \$PATH\n");
 }
 
 my @Stack = <>;  # slurp onto the Stack, before changing directory
@@ -97,7 +100,7 @@ if ($Fluadity) {   # 1.8
 } else {
 	system "$Timidity -Ow -o tmp.wav t.mid";
 }
-system 'normalize-audio --peak tmp.wav';
+system "$Normalize --peak tmp.wav";
 if ($TitleJpg or $CreditsJpg) {
 	if ($TitleJpg)   {
 		$PrePad  = 2.8;
@@ -462,6 +465,7 @@ to reflect where Perl is installed on your system.
 
 =head1 CHANGES
 
+ 20180522  2.0 use either normalize or normalize-audio
  20180520  1.9 add -r option for some reverb
  20180519  1.8 use either fluadity or timidity
  20141207  1.7 if no mencoder (eg: in debian jessie) use ffmpeg or avconv
