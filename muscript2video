@@ -7,8 +7,8 @@
 #     This script is free software; you can redistribute it and/or      #
 #            modify it under the same terms as Perl itself.             #
 #########################################################################
-my $Version       = '2.0';  # use either normalize or normalize-audio
-my $VersionDate   = '22may2018';
+my $Version       = '2.1';  # extend -t and -c to allow times to be specified
+my $VersionDate   = '23may2018';
 
 use File::Copy();
 my $TmpDir        = "/tmp/muscript2video.$$";
@@ -26,8 +26,8 @@ my $ScaleStaves   = 1.46;
 my $TitleJpg      = '';
 my $CreditsJpg    = '';
 my $TimeSoFar     = 0.0;
-my $PrePad        = 0.0;    # will be set if -t
-my $PostPad       = 0.0;    # will be set if -c
+my $PrePad        = 0.0;  my $PreTime  = 3.5;  # see -t   2.1
+my $PostPad       = 0.0;  my $PostTime = 5.0;  # see -c   2.1
 my $PageNum       = 0;
 my $Fps           = 5;
 my $Mencoder      = which('mencoder');   # 1.7
@@ -44,8 +44,17 @@ while ($ARGV[$[] =~ /^-([a-z])/) {
 		print "$n version $Version $VersionDate\n";
 		exit 0;
 	} elsif ($1 eq 'c') { shift; $CreditsJpg = shift;
+		if ($ARGV[$[] =~ /^\d+(\.\d*)?$/) {
+			$PostTime = 0 + $ARGV[$[]; shift;
+			print("PostTime = $PostTime\n");
+		}
 	} elsif ($1 eq 'r') { shift; $Reverb     = 1;
 	} elsif ($1 eq 't') { shift; $TitleJpg   = shift;
+		if ($ARGV[$[] =~ /^\d+(\.\d*)?$/) {
+			$PreTime = 0 + $ARGV[$[];
+			shift;
+			print("PreTime = $PreTime\n");
+		}
 	} else {
 		print "usage:\n";  my $synopsis = 0;
 		while (<DATA>) {
@@ -103,7 +112,7 @@ if ($Fluadity) {   # 1.8
 system "$Normalize --peak tmp.wav";
 if ($TitleJpg or $CreditsJpg) {
 	if ($TitleJpg)   {
-		$PrePad  = 2.8;
+		$PrePad  = $PreTime;
 		$TimeSoFar += $PrePad;
 		my $first_filename = next_filename();
 		rename 'pre.jpg', $first_filename;
@@ -115,7 +124,7 @@ if ($TitleJpg or $CreditsJpg) {
 			}
 		}
 	}
-	if ($CreditsJpg) { $PostPad = 3.4; }
+	if ($CreditsJpg) { $PostPad = $PostTime; }
 	if ($Reverb) {
 		warn   "sox tmp.wav t.wav gain -2 pad $PrePad $PostPad reverb\n";
 		system "sox tmp.wav t.wav gain -2 pad $PrePad $PostPad reverb";
@@ -185,7 +194,8 @@ if ($Mencoder) {
 	  . "-r $Fps -s ${Width}x$Height t.avi";   # 1.7 worked first try :-)
 } elsif ($Avconv) {
 	system "$Avconv -i t.wav -f image2 -r $Fps -i t_%06d.jpg "
-	  . "-r $Fps -s ${Width}x$Height t.avi"; # 1.7 aftefact at start of audio
+	  . "-r $Fps -s ${Width}x$Height t.avi";
+	# 1.7 timidity causes a scrunch aftefact at start of audio
 } else {
 	die " BUG: shouldn't reach here...";
 }
@@ -357,6 +367,8 @@ muscript2video - generates a page-turning video from a muscript file
 
   muscript2video file
   muscript2video -t title.jpg -c credits.jpg file
+  muscript2video -t title.jpg 5 -c credits.jpg file   # 5.0 sec title
+  muscript2video -t title.jpg -c credits.jpg 8.2 file # 8.2 sec credits
   muscript2video -v        # show the version
   perldoc muscript2video   # read the manual
 
@@ -380,7 +392,7 @@ This script uses I<muscript> to generate a separate I<.jpg> file for each page,
 repeating it with incrementing filenames for each fifth-of-a-second
 that the page lasts.
 
-By default, it uses I<mencoder> to generate the I<.avi> file,
+Originally, it used I<mencoder> to generate the I<.avi> file,
 using a mpeg4 video-codec and mp3 audio-codec that
 seem to be handled well by I<youtube>.
 But I<mencoder> is no longer available in I<debian jessie>,
@@ -398,23 +410,30 @@ and and the staves will look very small.
 
 =over 3
 
-=item B<-t title.jpg>
+=item B<-t title.jpg> or B<-t title.jpg 4.0>
 
-The file I<title.jpg> will be displayed for 2.6 seconds
-before the beginning of the music.
+The file I<title.jpg> will be displayed before the beginning of the music.
 It must be of B<exactly> the same geometry as specified
 in your I<boundingbox 1280 720> statement, or 1280x720 by default.
 If it is even slightly different, I<mencoder> will fail to make the video,
 producing numerous but totally unhelpful error messages.
 
-=item B<-c credits.jpg>
+By default (see the first example) it is displayed for 3.5 seconds;
+but the time can be specified (see the second example)
+as a number of seconds, after the filename.
 
-The file I<credits.jpg> will be displayed for 2.6 seconds
+=item B<-c credits.jpg> or B<-c credits.jpg 7>
+
+The file I<credits.jpg> will be displayed for seconds
 after the end of the music.
 It must be of B<exactly> the same geometry as specified
 in your I<boundingbox 1280 720> statement, or 1280x720 by default.
 If it is even slightly different, I<mencoder> will fail to make the video,
 producing numerous but totally unhelpful error messages.
+
+By default (see the first example) it is displayed for 5 seconds;
+but the time can be specified (see the second example)
+as a number of seconds, after the filename.
 
 You can use I<eps2img> to generate these I<.jpg> files
 directly from I<.eps> files such as:
@@ -439,6 +458,7 @@ directly from I<.eps> files such as:
 
 =head1 QUIRKS
 
+If you don't have I<fluadity> installed,
 I<TiMidity> produces an audio file which begins with the first note.
 Therefore, if your score begins with a rest, the pages will be turned
 out of sync with the audio.  Work around this by assigning very high
@@ -465,6 +485,7 @@ to reflect where Perl is installed on your system.
 
 =head1 CHANGES
 
+ 20180523  2.1 extend -t and -c to allow times to be specified
  20180522  2.0 use either normalize or normalize-audio
  20180520  1.9 add -r option for some reverb
  20180519  1.8 use either fluadity or timidity
@@ -482,6 +503,8 @@ to reflect where Perl is installed on your system.
  http://www.pjb.com.au/muscript/muscript2video
  http://www.pjb.com.au/muscript/eps2img
  http://www.pjb.com.au/muscript
+ http://www.pjb.com.au/midi/fluadity.html
+ http://www.pjb.com.au/comp/lua/fluidsynth.html
  http://www.pjb.com.au/midi
  timidity(1)
  timidity.cfg(5)
@@ -490,7 +513,7 @@ to reflect where Perl is installed on your system.
  avconv(1)
  ffmpeg(1)
  identify(1)   # to check the exact dimensions of your title.jpg
- sox(1)        # if -t or -c, muscript2video uses sox to pad the audio
+ sox(1)        # if -t or -c or -r, muscript2video uses sox on the audio
  perl(1)
 
 =cut
