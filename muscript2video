@@ -46,14 +46,14 @@ while ($ARGV[$[] =~ /^-([a-z])/) {
 	} elsif ($1 eq 'c') { shift; $CreditsJpg = shift;
 		if ($ARGV[$[] =~ /^\d+(\.\d*)?$/) {
 			$PostTime = 0 + $ARGV[$[]; shift;
-			print("PostTime = $PostTime\n");
+			# print("PostTime = $PostTime\n");
 		}
 	} elsif ($1 eq 'r') { shift; $Reverb     = 1;
 	} elsif ($1 eq 't') { shift; $TitleJpg   = shift;
 		if ($ARGV[$[] =~ /^\d+(\.\d*)?$/) {
 			$PreTime = 0 + $ARGV[$[];
 			shift;
-			print("PreTime = $PreTime\n");
+			# print("PreTime = $PreTime\n");
 		}
 	} else {
 		print "usage:\n";  my $synopsis = 0;
